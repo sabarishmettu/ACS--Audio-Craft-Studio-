@@ -26,7 +26,7 @@ import {
 } from 'lucide-react';
 import { ScriptChunk, VoiceOption } from '../types/tts';
 import { formatTime, downloadBase64Wav } from '../utils/audioUtils';
-import { stopAllSpeech, playSpeechUtterance } from '../utils/localVoiceSynth';
+import { stopAllSpeech, playSpeechUtterance, detectVoiceGender } from '../utils/localVoiceSynth';
 
 interface ScriptChunksPanelProps {
   chunks: ScriptChunk[];
@@ -159,13 +159,7 @@ export const ScriptChunksPanel: React.FC<ScriptChunksPanelProps> = ({
         const activeVoiceObj = voices.find(
           (v) => v.id === rawVoiceName || rawVoiceName.startsWith(v.id) || rawVoiceName.includes(v.name)
         );
-        const isMale =
-          activeVoiceObj?.gender === 'Male' ||
-          rawVoiceName.toLowerCase().includes('male') ||
-          rawVoiceName.toLowerCase().includes('puck') ||
-          rawVoiceName.toLowerCase().includes('charon') ||
-          rawVoiceName.toLowerCase().includes('fenrir');
-        const gender: 'Male' | 'Female' = isMale ? 'Male' : 'Female';
+        const gender = detectVoiceGender(activeVoiceObj?.id || chunk.selectedVoice, activeVoiceObj?.gender);
 
         playSpeechUtterance(
           chunk.text,

@@ -1,12 +1,25 @@
 import React, { useState } from 'react';
-import { Volume2, Play, Pause, HelpCircle, Sparkles, Cpu } from 'lucide-react';
+import { Volume2, Pause, HelpCircle, Sparkles, Cpu, Mic } from 'lucide-react';
 import { VoiceOption } from '../types/tts';
-import { synthesizeLocalWebVoice, stopAllSpeech, playSpeechUtterance } from '../utils/localVoiceSynth';
+import { stopAllSpeech, playSpeechUtterance, detectVoiceGender } from '../utils/localVoiceSynth';
+import { AUDIO_TAG_PRESETS } from '../utils/audioUtils';
 
 export const TTS_MODELS = [
   {
+    id: 'vibevoice-7b',
+    name: 'VibeVoice 7B (Flagship Deep Cinematic & Multi-Role)',
+    badge: 'VibeVoice 7B',
+    description: '7 Billion parameter acoustic architecture. Ultra-realistic multi-speaker dialogue, emotion transfer, deep dramatic nuance, and cinematic presence.',
+  },
+  {
+    id: 'vibevoice-1.5b',
+    name: 'VibeVoice 1.5B (Fast Conversational & Multi-Speaker)',
+    badge: 'VibeVoice 1.5B',
+    description: 'Lightweight 1.5B parameter acoustic LLM. Low latency, conversational cadence, natural breathing, and dynamic pacing.',
+  },
+  {
     id: 'gemini-3.8-flash-lite-tts',
-    name: 'Gemini 3.1 Flash Lite TTS (Fast & Recommended)',
+    name: 'Gemini 3.1 Flash Lite TTS (Fast & Standard)',
     badge: 'Lite 3.1',
     description: 'High throughput, optimal for 2–4 hour scripts, batch generation, and long-form narration.',
   },
@@ -88,6 +101,8 @@ export const VoiceSettingsPanel: React.FC<VoiceSettingsPanelProps> = ({
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const previewAudioRef = React.useRef<HTMLAudioElement | null>(null);
 
+  const isVibeVoice = selectedModel.startsWith('vibevoice');
+
   const handlePreviewVoice = async () => {
     if (isPreviewPlaying && previewAudioRef.current) {
       previewAudioRef.current.pause();
@@ -101,9 +116,8 @@ export const VoiceSettingsPanel: React.FC<VoiceSettingsPanelProps> = ({
     try {
       if (selectedModel === 'local-web-voice') {
         const activeVoiceObj = voices.find((v) => v.id === currentVoice);
-        const isMale = activeVoiceObj?.gender === 'Male' || currentVoice.toLowerCase().includes('male') || currentVoice.toLowerCase().includes('puck') || currentVoice.toLowerCase().includes('charon') || currentVoice.toLowerCase().includes('fenrir');
-        const gender: 'Male' | 'Female' = isMale ? 'Male' : 'Female';
-        const sampleText = `Welcome to Audio Craft Studio. This is a preview of the ${activeVoiceObj?.name || currentVoice} local voice engine.`;
+        const gender = detectVoiceGender(activeVoiceObj?.id || currentVoice, activeVoiceObj?.gender);
+        const sampleText = `Welcome to Audio Craft Studio. This is a preview of the ${activeVoiceObj?.name || currentVoice} voice profile.`;
         playSpeechUtterance(
           sampleText,
           gender,
@@ -173,15 +187,15 @@ export const VoiceSettingsPanel: React.FC<VoiceSettingsPanelProps> = ({
         </button>
       </div>
 
-      {/* Generation Model Selector (Above Voice Selection) */}
+      {/* 1. Generation Model Selector */}
       <div className="flex flex-col gap-1 mb-2.5">
         <div className="flex items-center justify-between">
           <label className="text-[11px] text-slate-300 font-semibold flex items-center gap-1.5">
             <Cpu className="h-3 w-3 text-sky-400" />
             <span>Generation Model</span>
           </label>
-          <span className="text-[10px] font-mono text-sky-400 bg-sky-950/80 border border-sky-800/60 px-1.5 py-0.2 rounded">
-            {TTS_MODELS.find((m) => m.id === selectedModel)?.badge || 'Gemini 3.1'}
+          <span className="text-[10px] font-mono text-purple-300 bg-purple-950/80 border border-purple-800/60 px-1.5 py-0.2 rounded">
+            {TTS_MODELS.find((m) => m.id === selectedModel)?.badge || 'Model'}
           </span>
         </div>
         <select
@@ -200,18 +214,21 @@ export const VoiceSettingsPanel: React.FC<VoiceSettingsPanelProps> = ({
         </p>
       </div>
 
-      {/* Voice Selection Dropdown */}
+      {/* 2. Voice Profile Dropdown (Model-Filtered) */}
       <div className="flex flex-col gap-1 mb-2.5">
         <div className="flex items-center justify-between">
-          <label className="text-[11px] text-slate-400 font-medium">Voice</label>
-          {onOpenCustomVoiceModal && (
+          <label className="text-[11px] text-slate-300 font-semibold flex items-center gap-1.5">
+            <Mic className="h-3 w-3 text-indigo-400" />
+            <span>{isVibeVoice ? 'VibeVoice Profile' : 'Gemini Voice Profile'}</span>
+          </label>
+          {!isVibeVoice && onOpenCustomVoiceModal && (
             <button
               onClick={onOpenCustomVoiceModal}
               type="button"
               className="flex items-center gap-1 text-[10px] font-semibold text-indigo-400 hover:text-indigo-300 transition-colors"
             >
               <Sparkles className="h-2.5 w-2.5" />
-              <span>+ Add Custom WAV Voice</span>
+              <span>+ Clone Custom WAV Voice</span>
             </button>
           )}
         </div>
@@ -226,9 +243,14 @@ export const VoiceSettingsPanel: React.FC<VoiceSettingsPanelProps> = ({
             </option>
           ))}
         </select>
+        {voices.find((v) => v.id === currentVoice)?.description && (
+          <p className="text-[10px] text-slate-400 mt-0.5 leading-tight">
+            {voices.find((v) => v.id === currentVoice)?.description}
+          </p>
+        )}
       </div>
 
-      {/* Language & Style 2-Columns */}
+      {/* 3. Language & Style 2-Columns */}
       <div className="grid grid-cols-2 gap-2.5 mb-2.5">
         <div className="flex flex-col gap-1">
           <label className="text-[11px] text-slate-400 font-medium">Language</label>
@@ -261,7 +283,7 @@ export const VoiceSettingsPanel: React.FC<VoiceSettingsPanelProps> = ({
         </div>
       </div>
 
-      {/* Sliders: Speed & Pitch */}
+      {/* 4. Sliders: Speed & Pitch */}
       <div className="flex flex-col gap-2 mb-2.5">
         {/* Speed Slider */}
         <div className="flex items-center justify-between text-[11px]">
@@ -282,7 +304,7 @@ export const VoiceSettingsPanel: React.FC<VoiceSettingsPanelProps> = ({
 
         {/* Pitch Slider */}
         <div className="flex items-center justify-between text-[11px]">
-          <span className="text-slate-400 font-medium">Pitch_</span>
+          <span className="text-slate-400 font-medium">Pitch</span>
           <div className="flex items-center gap-2">
             <input
               type="range"
@@ -298,7 +320,7 @@ export const VoiceSettingsPanel: React.FC<VoiceSettingsPanelProps> = ({
         </div>
       </div>
 
-      {/* Voice Direction / Context Prompt Textarea */}
+      {/* 5. Voice Direction / Context Prompt Textarea */}
       <div className="flex flex-col gap-1">
         <div className="flex items-center justify-between">
           <label className="text-[11px] text-slate-400 font-medium">
@@ -313,6 +335,20 @@ export const VoiceSettingsPanel: React.FC<VoiceSettingsPanelProps> = ({
           className="w-full resize-none rounded-lg bg-slate-950 border border-slate-800 p-2 text-xs leading-relaxed text-slate-200 placeholder-slate-600 focus:border-indigo-500 focus:outline-none font-sans"
           placeholder="e.g. Read this as a dramatic YouTube manhwa recap narrator..."
         />
+
+        <div className="flex flex-wrap gap-1 mt-1.5">
+          {AUDIO_TAG_PRESETS.slice(0, 6).map((item) => (
+            <button
+              key={item.tag}
+              type="button"
+              onClick={() => onVoicePromptChange(`${voicePrompt} ${item.tag}`.trim().slice(0, 500))}
+              className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-300 hover:border-indigo-500 hover:text-indigo-300 transition-colors"
+              title={`Insert ${item.tag} into prompt`}
+            >
+              + {item.tag}
+            </button>
+          ))}
+        </div>
 
         <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono mt-0.5">
           <span>{voicePrompt.length}/500</span>

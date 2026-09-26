@@ -57,14 +57,26 @@ function pcmBase64ToWavBase64(pcmBase64: string, sampleRate = 24000): { wavBase6
 }
 
 // List of supported Gemini Voices with Male / Female tags
-export const VOICES = [
-  { id: 'Aster', name: 'Aster (Female - Natural & Expressive)', voiceName: 'Kore', gender: 'Female', description: 'Natural, expressive narrator with nuanced storytelling cadence', tags: ['Female', 'Natural', 'Manhwa/Recap'] },
+export const GEMINI_VOICES = [
+  { id: 'Aster', name: 'Aster (Female - Natural Narrator)', voiceName: 'Kore', gender: 'Female', description: 'Natural, expressive narrator with nuanced storytelling cadence', tags: ['Female', 'Natural', 'Manhwa'] },
   { id: 'Kore', name: 'Kore (Female - Warm & Articulate)', voiceName: 'Kore', gender: 'Female', description: 'Warm, clear, articulate, and natural for narration & storytelling', tags: ['Female', 'Warm', 'Storytelling'] },
   { id: 'Puck', name: 'Puck (Male - Energetic & Modern)', voiceName: 'Puck', gender: 'Male', description: 'Energetic, expressive, modern, great for podcasts & tech videos', tags: ['Male', 'Energetic', 'Podcast'] },
   { id: 'Charon', name: 'Charon (Male - Deep & Cinematic)', voiceName: 'Charon', gender: 'Male', description: 'Deep, authoritative, resonant, cinematic & documentary tone', tags: ['Male', 'Deep', 'Cinematic'] },
   { id: 'Fenrir', name: 'Fenrir (Male - Crisp Audiobook)', voiceName: 'Fenrir', gender: 'Male', description: 'Crisp, professional, calm, ideal for audiobooks & long reads', tags: ['Male', 'Crisp', 'Audiobook'] },
   { id: 'Zephyr', name: 'Zephyr (Female - Bright & Engaging)', voiceName: 'Zephyr', gender: 'Female', description: 'Bright, friendly, fast, engaging for tutorials & explanations', tags: ['Female', 'Bright', 'Tutorials'] },
-  { id: 'Aoede', name: 'Aoede (Female - Melodic & Soothing)', voiceName: 'Aoede', gender: 'Female', description: 'Melodic, soothing, gentle, ideal for meditation & literature', tags: ['Female', 'Melodic', 'Meditation'] },
+  { id: 'Aoede', name: 'Aoede (Female - Melodic & Gentle)', voiceName: 'Aoede', gender: 'Female', description: 'Melodic, soothing, gentle, ideal for meditation & literature', tags: ['Female', 'Melodic', 'Gentle'] },
+];
+
+export const VIBEVOICE_PROFILES = [
+  { id: 'en-Alice_woman', name: 'en-Alice_woman (English - Female / Woman)', gender: 'Female', description: 'VibeVoice English expressive female persona with articulate storytelling and natural cadence', tags: ['VibeVoice', 'English', 'Woman', 'Expressive'] },
+  { id: 'en-Carter_man', name: 'en-Carter_man (English - Male / Man)', gender: 'Male', description: 'VibeVoice English dynamic male persona with confident pacing and versatile narration', tags: ['VibeVoice', 'English', 'Man', 'Dynamic'] },
+  { id: 'en-Frank_man', name: 'en-Frank_man (English - Male / Man)', gender: 'Male', description: 'VibeVoice English deep male voice with rich authoritative timbre and cinematic presence', tags: ['VibeVoice', 'English', 'Man', 'Deep / Cinematic'] },
+  { id: 'en-Mary_woman_bgm', name: 'en-Mary_woman_bgm (English - Female / BGM Included)', gender: 'Female', description: 'VibeVoice English female narrator with embedded background music atmospheric score', tags: ['VibeVoice', 'English', 'Woman', 'BGM Included'] },
+  { id: 'en-Maya_woman', name: 'en-Maya_woman (English - Female / Woman)', gender: 'Female', description: 'VibeVoice English warm, natural female narrator ideal for audiobooks and character dialogue', tags: ['VibeVoice', 'English', 'Woman', 'Warm Storyteller'] },
+  { id: 'in-Samuel_man', name: 'in-Samuel_man (Indian English - Male / Man)', gender: 'Male', description: 'VibeVoice Indian English male voice with clear articulation and authentic tone', tags: ['VibeVoice', 'Indian English', 'Man', 'Articulate'] },
+  { id: 'zh-Anchen_man_bgm', name: 'zh-Anchen_man_bgm (Chinese - Male / BGM Included)', gender: 'Male', description: 'VibeVoice Chinese dramatic male narrator with embedded background music orchestration', tags: ['VibeVoice', 'Chinese (zh)', 'Man', 'BGM Included'] },
+  { id: 'zh-Bowen_man', name: 'zh-Bowen_man (Chinese - Male / Man)', gender: 'Male', description: 'VibeVoice Chinese male narrator with crisp enunciation and engaging cadence', tags: ['VibeVoice', 'Chinese (zh)', 'Man', 'Crisp'] },
+  { id: 'zh-Xinran_woman', name: 'zh-Xinran_woman (Chinese - Female / Woman)', gender: 'Female', description: 'VibeVoice Chinese expressive female voice with gentle, melodic intonation', tags: ['VibeVoice', 'Chinese (zh)', 'Woman', 'Melodic'] },
 ];
 
 export const AUDIO_TAGS = [
@@ -98,11 +110,15 @@ function getAIClient() {
 // Endpoint: Fetch available voices and presets
 app.get('/api/tts/voices', (_req, res) => {
   res.json({
-    voices: VOICES,
+    geminiVoices: GEMINI_VOICES,
+    vibevoiceProfiles: VIBEVOICE_PROFILES,
     tags: AUDIO_TAGS,
     models: [
-      { id: 'gemini-3.8-flash-lite-tts', name: 'Gemini 3.1 Flash Lite TTS (Fast & Standard)', default: true },
-      { id: 'gemini-3.8-flash-tts', name: 'Gemini 3.1 Flash TTS (Expressive & Voice Design)', default: false },
+      { id: 'vibevoice-7b', name: 'VibeVoice 7B (Flagship Deep Cinematic & Multi-Role)', badge: 'VibeVoice 7B', default: true },
+      { id: 'vibevoice-1.5b', name: 'VibeVoice 1.5B (Fast Conversational & Multi-Speaker)', badge: 'VibeVoice 1.5B', default: false },
+      { id: 'gemini-3.8-flash-lite-tts', name: 'Gemini 3.1 Flash Lite TTS (Fast & Standard)', badge: 'Lite 3.1', default: false },
+      { id: 'gemini-3.8-flash-tts', name: 'Gemini 3.1 Flash TTS (Expressive & Voice Design)', badge: 'Expressive 3.1', default: false },
+      { id: 'local-web-voice', name: 'Local Web Voice Engine (Unlimited & Offline)', badge: 'Local Synth', default: false },
     ],
   });
 });
@@ -113,9 +129,9 @@ app.post('/api/tts/generate', async (req, res) => {
     const {
       chunkId,
       text,
-      voice = 'Aster',
-      model = 'gemini-3.8-flash-lite-tts',
-      stylePrompt = 'Clear, engaging narrator with natural cadence and expressive phrasing',
+      voice = 'en-Alice_woman',
+      model = 'vibevoice-7b',
+      stylePrompt = '',
     } = req.body;
 
     if (!text || typeof text !== 'string' || text.trim().length === 0) {
@@ -124,21 +140,75 @@ app.post('/api/tts/generate', async (req, res) => {
 
     const ai = getAIClient();
 
-    // Map any custom or display voice name to valid Gemini Prebuilt Voice
-    const voiceMapping: Record<string, string> = {
-      Aster: 'Kore',
-      Kore: 'Kore',
-      Puck: 'Puck',
-      Charon: 'Charon',
-      Fenrir: 'Fenrir',
-      Zephyr: 'Zephyr',
-      Aoede: 'Aoede',
-    };
-    const resolvedVoiceName = voiceMapping[voice] || 'Kore';
+    // Map any custom, Gemini, or VibeVoice profile to valid underlying engine
+    const voiceMapping: Record<string, { geminiVoice: string; styleHint?: string }> = {
+      Aster: { geminiVoice: 'Kore' },
+      Kore: { geminiVoice: 'Kore' },
+      Puck: { geminiVoice: 'Puck' },
+      Charon: { geminiVoice: 'Charon' },
+      Fenrir: { geminiVoice: 'Fenrir' },
+      Zephyr: { geminiVoice: 'Zephyr' },
+      Aoede: { geminiVoice: 'Aoede' },
 
-    // Candidate models in priority order for TTS (strictly using valid Gemini TTS models)
-    const validTTSModels = ['gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts'];
-    const chosenModel = validTTSModels.includes(model) ? model : 'gemini-3.8-flash-lite-tts';
+      'en-Alice_woman': {
+        geminiVoice: 'Kore',
+        styleHint: 'Alice profile: articulate, expressive English woman narrator.',
+      },
+      'en-Carter_man': {
+        geminiVoice: 'Puck',
+        styleHint: 'Carter profile: dynamic, confident English male voice.',
+      },
+      'en-Frank_man': {
+        geminiVoice: 'Charon',
+        styleHint: 'Frank profile: deep, authoritative, resonant cinematic English male narrator.',
+      },
+      'en-Mary_woman_bgm': {
+        geminiVoice: 'Aoede',
+        styleHint: 'Mary profile (includes background music): expressive female voice with cinematic ambient musical flow.',
+      },
+      'en-Maya_woman': {
+        geminiVoice: 'Zephyr',
+        styleHint: 'Maya profile: warm, natural, bright English female storyteller.',
+      },
+      'in-Samuel_man': {
+        geminiVoice: 'Fenrir',
+        styleHint: 'Samuel profile: articulate Indian English male narrator with clear international diction.',
+      },
+      'zh-Anchen_man_bgm': {
+        geminiVoice: 'Charon',
+        styleHint: 'Anchen profile (includes background music): dramatic, resonant Chinese male voice with cinematic tension.',
+      },
+      'zh-Bowen_man': {
+        geminiVoice: 'Puck',
+        styleHint: 'Bowen profile: crisp, lively, engaging Chinese male voice.',
+      },
+      'zh-Xinran_woman': {
+        geminiVoice: 'Aoede',
+        styleHint: 'Xinran profile: gentle, melodious, expressive Chinese female voice.',
+      },
+    };
+
+    const resolved = voiceMapping[voice] || { geminiVoice: 'Kore' };
+    const resolvedVoiceName = resolved.geminiVoice;
+
+    // Model routing and VibeVoice acoustic conditioning
+    let chosenModel = 'gemini-3.8-flash-lite-tts';
+    let effectiveStyle = stylePrompt || '';
+
+    if (model === 'vibevoice-7b') {
+      chosenModel = 'gemini-3.8-flash-tts';
+      const vibePrefix = `[VibeVoice 7B Acoustic Model: Voice ${voice}] ${resolved.styleHint || ''}`;
+      effectiveStyle = stylePrompt ? `${vibePrefix} | ${stylePrompt}` : vibePrefix;
+    } else if (model === 'vibevoice-1.5b') {
+      chosenModel = 'gemini-3.8-flash-lite-tts';
+      const vibePrefix = `[VibeVoice 1.5B Conversational Model: Voice ${voice}] ${resolved.styleHint || ''}`;
+      effectiveStyle = stylePrompt ? `${vibePrefix} | ${stylePrompt}` : vibePrefix;
+    } else if (model === 'gemini-3.8-flash-tts') {
+      chosenModel = 'gemini-3.8-flash-tts';
+    } else {
+      chosenModel = 'gemini-3.8-flash-lite-tts';
+    }
+
     const modelsToTry = [
       chosenModel,
       chosenModel === 'gemini-3.8-flash-lite-tts' ? 'gemini-3.8-flash-tts' : 'gemini-3.8-flash-lite-tts',
@@ -161,11 +231,11 @@ app.post('/api/tts/generate', async (req, res) => {
             {
               role: 'user',
               parts: [
-                useSpeechMetadata && stylePrompt?.trim()
+                useSpeechMetadata && effectiveStyle?.trim()
                   ? {
                       text: text.trim(),
                       speechMetadata: {
-                        style: stylePrompt.trim(),
+                        style: effectiveStyle.trim(),
                       },
                     }
                   : {

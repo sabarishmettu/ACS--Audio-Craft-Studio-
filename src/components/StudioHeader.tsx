@@ -8,6 +8,7 @@ import {
   Sun,
   Moon,
   HelpCircle,
+  Cpu,
 } from 'lucide-react';
 
 interface StudioHeaderProps {
@@ -16,6 +17,7 @@ interface StudioHeaderProps {
   onSaveProject: () => void;
   onOpenSettings: () => void;
   onOpenHelp: () => void;
+  onOpenHardwareSpecs?: () => void;
   isDarkMode?: boolean;
   onToggleTheme?: () => void;
 }
@@ -26,6 +28,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
   onSaveProject,
   onOpenSettings,
   onOpenHelp,
+  onOpenHardwareSpecs,
   isDarkMode = true,
   onToggleTheme,
 }) => {
@@ -83,6 +86,17 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
           <Save className="h-3.5 w-3.5 text-slate-400" />
           <span>Save Project</span>
         </button>
+
+        {onOpenHardwareSpecs && (
+          <button
+            onClick={onOpenHardwareSpecs}
+            className="flex items-center gap-1.5 rounded-lg bg-indigo-950/60 hover:bg-indigo-900/60 border border-indigo-700/60 px-2.5 py-1.5 text-xs font-medium text-indigo-200 transition-colors shadow-xs"
+            title="Local Compute & Hardware Requirements (1.5B vs 7B)"
+          >
+            <Cpu className="h-3.5 w-3.5 text-cyan-400" />
+            <span>Hardware & Setup</span>
+          </button>
+        )}
 
         <button
           onClick={onOpenSettings}

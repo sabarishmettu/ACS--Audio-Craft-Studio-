@@ -1,7 +1,7 @@
 import JSZip from 'jszip';
-import { ScriptChunk } from '../types/tts';
+import { ScriptChunk, VoiceOption } from '../types/tts';
 
-export const DEFAULT_VOICES = [
+export const GEMINI_VOICES: VoiceOption[] = [
   { id: 'Aster', name: 'Aster (Female - Natural Narrator)', gender: 'Female' as const, description: 'Natural, expressive narrator with nuanced storytelling cadence', tags: ['Female', 'Natural', 'Manhwa'] },
   { id: 'Kore', name: 'Kore (Female - Warm & Articulate)', gender: 'Female' as const, description: 'Warm, clear, articulate, and natural for narration & storytelling', tags: ['Female', 'Warm', 'Storytelling'] },
   { id: 'Puck', name: 'Puck (Male - Energetic & Modern)', gender: 'Male' as const, description: 'Energetic, expressive, modern, great for podcasts & tech videos', tags: ['Male', 'Energetic', 'Podcast'] },
@@ -9,6 +9,116 @@ export const DEFAULT_VOICES = [
   { id: 'Fenrir', name: 'Fenrir (Male - Crisp Audiobook)', gender: 'Male' as const, description: 'Crisp, professional, calm, ideal for audiobooks & long reads', tags: ['Male', 'Crisp', 'Audiobook'] },
   { id: 'Zephyr', name: 'Zephyr (Female - Bright & Engaging)', gender: 'Female' as const, description: 'Bright, friendly, fast, engaging for tutorials & explanations', tags: ['Female', 'Bright', 'Tutorials'] },
   { id: 'Aoede', name: 'Aoede (Female - Melodic & Gentle)', gender: 'Female' as const, description: 'Melodic, soothing, gentle, ideal for meditation & literature', tags: ['Female', 'Melodic', 'Gentle'] },
+];
+
+export const VIBEVOICE_PROFILES: VoiceOption[] = [
+  {
+    id: 'en-Alice_woman',
+    name: 'en-Alice_woman (English - Female / Woman)',
+    gender: 'Female' as const,
+    description: 'VibeVoice English expressive female persona with articulate storytelling and natural cadence',
+    tags: ['VibeVoice', 'English', 'Woman', 'Expressive'],
+  },
+  {
+    id: 'en-Carter_man',
+    name: 'en-Carter_man (English - Male / Man)',
+    gender: 'Male' as const,
+    description: 'VibeVoice English dynamic male persona with confident pacing and versatile narration',
+    tags: ['VibeVoice', 'English', 'Man', 'Dynamic'],
+  },
+  {
+    id: 'en-Frank_man',
+    name: 'en-Frank_man (English - Male / Man)',
+    gender: 'Male' as const,
+    description: 'VibeVoice English deep male voice with rich authoritative timbre and cinematic presence',
+    tags: ['VibeVoice', 'English', 'Man', 'Deep / Cinematic'],
+  },
+  {
+    id: 'en-Mary_woman_bgm',
+    name: 'en-Mary_woman_bgm (English - Female / BGM Included)',
+    gender: 'Female' as const,
+    description: 'VibeVoice English female narrator with embedded background music atmospheric score',
+    tags: ['VibeVoice', 'English', 'Woman', 'BGM Included'],
+  },
+  {
+    id: 'en-Maya_woman',
+    name: 'en-Maya_woman (English - Female / Woman)',
+    gender: 'Female' as const,
+    description: 'VibeVoice English warm, natural female narrator ideal for audiobooks and character dialogue',
+    tags: ['VibeVoice', 'English', 'Woman', 'Warm Storyteller'],
+  },
+  {
+    id: 'in-Samuel_man',
+    name: 'in-Samuel_man (Indian English - Male / Man)',
+    gender: 'Male' as const,
+    description: 'VibeVoice Indian English male voice with clear articulation and authentic tone',
+    tags: ['VibeVoice', 'Indian English', 'Man', 'Articulate'],
+  },
+  {
+    id: 'zh-Anchen_man_bgm',
+    name: 'zh-Anchen_man_bgm (Chinese - Male / BGM Included)',
+    gender: 'Male' as const,
+    description: 'VibeVoice Chinese dramatic male narrator with embedded background music orchestration',
+    tags: ['VibeVoice', 'Chinese (zh)', 'Man', 'BGM Included'],
+  },
+  {
+    id: 'zh-Bowen_man',
+    name: 'zh-Bowen_man (Chinese - Male / Man)',
+    gender: 'Male' as const,
+    description: 'VibeVoice Chinese male narrator with crisp enunciation and engaging cadence',
+    tags: ['VibeVoice', 'Chinese (zh)', 'Man', 'Crisp'],
+  },
+  {
+    id: 'zh-Xinran_woman',
+    name: 'zh-Xinran_woman (Chinese - Female / Woman)',
+    gender: 'Female' as const,
+    description: 'VibeVoice Chinese expressive female voice with gentle, melodic intonation',
+    tags: ['VibeVoice', 'Chinese (zh)', 'Woman', 'Melodic'],
+  },
+];
+
+export const DEFAULT_VOICES = GEMINI_VOICES;
+
+export const SAMPLE_SCRIPTS = [
+  {
+    title: 'Shadow Monarch Ascension (Manhwa Recap)',
+    genre: 'Manhwa / Action',
+    style: 'Dramatic',
+    recommendedVoice: 'en-Alice_woman',
+    text: `Prologue
+In the beginning, there was only darkness...
+No light, no sound, no time — just an endless void where the laws of the world did not exist.
+
+But from that void, a single will emerged.
+A will that was never meant to be, yet a will that would change everything.
+
+Chapter 1: The Boy Who Was Forgotten
+The cold wind blew through the ruined village, carrying with it the scent of ash and blood.
+Among the broken houses, a young boy lay on the ground, his body covered in wounds.
+His name was Kai.
+Once the heir of a proud family, now nothing more than a discarded existence.
+
+He opened his eyes slowly, the pain in his chest sharper than ever.
+"...So this is how it ends," he whispered.
+
+Chapter 2: The Awakening of the Black Core
+Deep within Kai's soul, an ancient sigil began to glow in violet radiance.
+The whispers of primordial shadow monarchs echoed across the realm:
+"Rise, Kai. Your ascension has only just begun."`,
+  },
+  {
+    title: 'Cyberpunk 2099: Neo-Seoul Detective',
+    genre: 'Sci-Fi / Thriller',
+    style: 'Documentary',
+    recommendedVoice: 'en-Frank_man',
+    text: `Act 1: Rain on 4th Sector
+Rain dripped from the rusted neon billboard above 4th Sector alleyway.
+The synth-jack on the asphalt was already stone cold, cybernetic oculars flickering a dead crimson.
+
+"Detective Vance, scan shows an unregistered military neural weave," the comms unit chimed.
+Vance lit his cigarette, the flame reflecting off wet ferro-concrete.
+"This wasn't a standard hit. Someone wanted his memories wiped before the upload."`,
+  },
 ];
 
 export const AUDIO_TAG_PRESETS = [
@@ -69,65 +179,29 @@ export function downloadBase64Wav(base64Data: string, filename: string) {
 
 export async function downloadAllChunksZip(chunks: ScriptChunk[], projectName = 'audiocraft-studio-export') {
   const zip = new JSZip();
-  const audioFolder = zip.folder('audio_chunks');
-  const generatedChunks = chunks.filter(c => c.audioBase64);
+  const validChunks = chunks.filter((c) => c.status === 'generated' && c.audioBase64);
 
-  if (generatedChunks.length === 0) {
-    throw new Error('No generated audio chunks available to export.');
+  if (validChunks.length === 0) {
+    throw new Error('No generated audio chunks to download.');
   }
 
-  // Add individual WAV files
-  generatedChunks.forEach((chunk, i) => {
-    const chunkName = `chunk_${String(chunk.index || i + 1).padStart(3, '0')}_${chunk.selectedVoice || 'voice'}.wav`;
-    audioFolder?.file(chunkName, chunk.audioBase64!, { base64: true });
+  validChunks.forEach((chunk) => {
+    const binary = atob(chunk.audioBase64!);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    const filename = `chunk_${String(chunk.index).padStart(3, '0')}.wav`;
+    zip.file(filename, bytes);
   });
 
-  // Add transcript metadata
-  const metadata = {
-    exportedAt: new Date().toISOString(),
-    totalChunks: generatedChunks.length,
-    totalDurationSeconds: generatedChunks.reduce((sum, c) => sum + (c.duration || 0), 0),
-    chunks: generatedChunks.map(c => ({
-      index: c.index,
-      text: c.text,
-      duration: c.duration,
-      voice: c.selectedVoice,
-    })),
-  };
-  zip.file('metadata.json', JSON.stringify(metadata, null, 2));
-  zip.file('full_transcript.txt', chunks.map(c => `[Chunk ${c.index}]\n${c.text}\n`).join('\n'));
-
-  const blob = await zip.generateAsync({ type: 'blob' });
-  const url = URL.createObjectURL(blob);
+  const content = await zip.generateAsync({ type: 'blob' });
+  const url = URL.createObjectURL(content);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${projectName}_stems.zip`;
+  a.download = `${projectName}_all_chunks.zip`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
-
-// Starter template script for instant demo testing
-export const SAMPLE_SCRIPTS = [
-  {
-    title: 'Shadow Monarch: Ascension of the Awakened (Starter Template)',
-    genre: 'Manhwa / Action Anime Recap',
-    recommendedVoice: 'Aster',
-    style: 'Dramatic YouTube manhwa recap narrator. Natural, confident, and conversational.',
-    text: `[excited] Deep inside the dual dungeon of the S-Rank catacombs, Hunter Kai stood breathless before the towering obsidian throne.
-
-[serious] The stone colossus raised its greatsword, crushing the temple floor with earth-shattering force. [dramatic pause] Every survivor from the raid squad had collapsed into unconsciousness.
-
-[whispers] "Is this where my journey ends?" Kai muttered under his breath, his daggers shaking with exhaustion.
-
-[excited] But suddenly, <breath> a glowing crimson system window materialized before his eyes:
-[Notification: Quest 'Survive the Monarch Trial' Completed. Secret Class 'Shadow Monarch' is now unlocked.]
-
-[warm] A surge of ancient dark mana surged through his veins. Kai looked up with a calm smile.
-[excited] "Arise," he commanded into the void.
-
-The shadows beneath the fallen beasts stirred to life. The whispers of primordial monarchs echoed across the realm:
-[whispers] "Rise, Kai. Your ascension has only just begun."`,
-  },
-];

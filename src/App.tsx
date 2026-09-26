@@ -17,10 +17,11 @@ import { ProjectBrowserModal } from './components/ProjectBrowserModal';
 import { NewProjectModal } from './components/NewProjectModal';
 import { SaveProjectModal } from './components/SaveProjectModal';
 import { HelpGuideModal } from './components/HelpGuideModal';
+import { HardwareRequirementsModal } from './components/HardwareRequirementsModal';
 import { ScriptChunk, VoiceOption, MasterTrack } from './types/tts';
-import { DEFAULT_VOICES, downloadAllChunksZip } from './utils/audioUtils';
+import { GEMINI_VOICES, VIBEVOICE_PROFILES, downloadAllChunksZip } from './utils/audioUtils';
 import { SavedProject, saveProjectToStorage } from './utils/projectManager';
-import { synthesizeLocalWebVoice } from './utils/localVoiceSynth';
+import { synthesizeLocalWebVoice, detectVoiceGender } from './utils/localVoiceSynth';
 
 const DEFAULT_MANHWA_SCRIPT = `Prologue
 In the beginning, there was only darkness...
@@ -52,9 +53,9 @@ The whispers of primordial shadow monarchs echoed across the realm:
 export default function App() {
   // Master Script & Settings
   const [script, setScript] = useState<string>(DEFAULT_MANHWA_SCRIPT);
-  const [voices, setVoices] = useState<VoiceOption[]>(DEFAULT_VOICES);
-  const [selectedModel, setSelectedModel] = useState<string>('gemini-3.8-flash-lite-tts');
-  const [currentVoice, setCurrentVoice] = useState<string>('Aster');
+  const [customVoices, setCustomVoices] = useState<VoiceOption[]>([]);
+  const [selectedModel, setSelectedModel] = useState<string>('vibevoice-7b');
+  const [currentVoice, setCurrentVoice] = useState<string>('en-Alice_woman');
   const [language, setLanguage] = useState<string>('English');
   const [style, setStyle] = useState<string>('Narrative');
   const [speed, setSpeed] = useState<number>(1.0);
@@ -62,6 +63,33 @@ export default function App() {
   const [voicePrompt, setVoicePrompt] = useState<string>(
     'Read this as a dramatic YouTube manhwa recap narrator. Keep the delivery engaging, natural, confident, and conversational. Avoid sounding robotic.'
   );
+
+  // Compute model-specific voices (VibeVoice profiles when VibeVoice is selected; Gemini profiles when Gemini is selected)
+  const activeVoices = React.useMemo(() => {
+    if (selectedModel.startsWith('vibevoice')) {
+      return VIBEVOICE_PROFILES;
+    }
+    if (selectedModel.startsWith('gemini')) {
+      return [...GEMINI_VOICES, ...customVoices];
+    }
+    return [...VIBEVOICE_PROFILES, ...GEMINI_VOICES, ...customVoices];
+  }, [selectedModel, customVoices]);
+
+  // Model selection handler ensuring voice synchronization
+  const handleSelectModel = (newModel: string) => {
+    setSelectedModel(newModel);
+    if (newModel.startsWith('vibevoice')) {
+      const isCurrentVibe = VIBEVOICE_PROFILES.some((v) => v.id === currentVoice);
+      if (!isCurrentVibe) {
+        setCurrentVoice('en-Alice_woman');
+      }
+    } else if (newModel.startsWith('gemini')) {
+      const isCurrentGemini = GEMINI_VOICES.some((v) => v.id === currentVoice) || customVoices.some((v) => v.id === currentVoice);
+      if (!isCurrentGemini) {
+        setCurrentVoice('Aster');
+      }
+    }
+  };
 
   // Chunks State
   const [chunks, setChunks] = useState<ScriptChunk[]>([]);
@@ -102,6 +130,7 @@ export default function App() {
   const [isCustomVoiceModalOpen, setIsCustomVoiceModalOpen] = useState<boolean>(false);
   const [isProjectBrowserOpen, setIsProjectBrowserOpen] = useState<boolean>(false);
   const [isHelpOpen, setIsHelpOpen] = useState<boolean>(false);
+  const [isHardwareModalOpen, setIsHardwareModalOpen] = useState<boolean>(false);
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'info' | 'error' } | null>(null);
 
@@ -113,7 +142,7 @@ export default function App() {
   };
 
   const handleAddCustomVoice = (newVoice: VoiceOption) => {
-    setVoices((prev) => [newVoice, ...prev.filter((v) => v.id !== newVoice.id)]);
+    setCustomVoices((prev) => [newVoice, ...prev.filter((v) => v.id !== newVoice.id)]);
     setCurrentVoice(newVoice.id);
     if (newVoice.customPrompt) {
       setVoicePrompt(newVoice.customPrompt);
@@ -140,11 +169,6 @@ export default function App() {
   useEffect(() => {
     fetch('/api/tts/voices')
       .then((res) => res.json())
-      .then((data) => {
-        if (data.voices && Array.isArray(data.voices)) {
-          setVoices(data.voices);
-        }
-      })
       .catch((err) => console.warn('Using default voice catalog:', err));
   }, []);
 
@@ -309,10 +333,9 @@ export default function App() {
     setCurrentlyGeneratingId(chunkId);
 
     try {
-      const activeVoiceObj = voices.find((v) => v.id === currentVoice) || voices.find((v) => v.id === chunk.selectedVoice);
-      const isMale = activeVoiceObj?.gender === 'Male' || currentVoice.toLowerCase().includes('male') || currentVoice.toLowerCase().includes('puck') || currentVoice.toLowerCase().includes('charon') || currentVoice.toLowerCase().includes('fenrir');
-      const gender: 'Male' | 'Female' = isMale ? 'Male' : 'Female';
-      const result = await synthesizeLocalWebVoice(chunk.text, gender, speed, 1.0 + pitch / 10);
+      const activeVoiceObj = activeVoices.find((v) => v.id === currentVoice) || activeVoices.find((v) => v.id === chunk.selectedVoice);
+      const gender = detectVoiceGender(activeVoiceObj?.id || currentVoice, activeVoiceObj?.gender);
+      const result = await synthesizeLocalWebVoice(chunk.text, gender, speed, 1.0 + pitch / 10, activeVoiceObj?.id || currentVoice);
 
       setChunks((prev) =>
         prev.map((c) =>
@@ -332,7 +355,7 @@ export default function App() {
             : c
         )
       );
-      showToast(`Chunk #${String(chunk.index).padStart(3, '0')} generated with ${activeVoiceObj?.name || 'Local Voice'}!`, 'success');
+      showToast(`Chunk #${String(chunk.index).padStart(3, '0')} generated with ${activeVoiceObj?.name || 'Local Voice'} (${gender})!`, 'success');
     } catch (err: any) {
       console.error('Local synth error:', err);
       setChunks((prev) =>
@@ -760,6 +783,7 @@ export default function App() {
         onSaveProject={handleSaveProject}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenHelp={() => setIsHelpOpen(true)}
+        onOpenHardwareSpecs={() => setIsHardwareModalOpen(true)}
         isDarkMode={isDarkMode}
         onToggleTheme={() => setIsDarkMode(!isDarkMode)}
       />
@@ -784,7 +808,7 @@ export default function App() {
         <section className="flex-1 h-full flex flex-col min-h-0">
           <ScriptChunksPanel
             chunks={chunks}
-            voices={voices}
+            voices={activeVoices}
             currentVoice={currentVoice}
             onGenerateChunk={handleGenerateChunk}
             onCancelChunk={handleCancelChunk}
@@ -804,12 +828,12 @@ export default function App() {
         <section className="w-full sm:w-[32%] xl:w-[26%] h-full flex flex-col min-h-0 overflow-y-auto scrollbar-thin border-l border-slate-800/80 bg-[#0e1424]">
           {/* 3. Voice Settings */}
           <VoiceSettingsPanel
-            voices={voices}
+            voices={activeVoices}
             currentVoice={currentVoice}
             onSelectVoice={setCurrentVoice}
             onOpenCustomVoiceModal={() => setIsCustomVoiceModalOpen(true)}
             selectedModel={selectedModel}
-            onSelectModel={setSelectedModel}
+            onSelectModel={handleSelectModel}
             language={language}
             onLanguageChange={setLanguage}
             style={style}
@@ -867,13 +891,13 @@ export default function App() {
       <VoiceSettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
-        voices={voices}
+        voices={activeVoices}
         currentVoice={currentVoice}
         onSelectVoice={setCurrentVoice}
         stylePrompt={voicePrompt}
         onStylePromptChange={setVoicePrompt}
         selectedModel={selectedModel}
-        onSelectModel={setSelectedModel}
+        onSelectModel={handleSelectModel}
         gapDurationMs={300}
         onGapDurationChange={() => {}}
         onOpenCustomVoiceModal={() => {
@@ -936,6 +960,12 @@ export default function App() {
       <HelpGuideModal
         isOpen={isHelpOpen}
         onClose={() => setIsHelpOpen(false)}
+      />
+
+      {/* Hardware & Local Compute Requirements Modal */}
+      <HardwareRequirementsModal
+        isOpen={isHardwareModalOpen}
+        onClose={() => setIsHardwareModalOpen(false)}
       />
 
       {/* Floating Notification Toast */}

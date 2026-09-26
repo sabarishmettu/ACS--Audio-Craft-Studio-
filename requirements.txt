@@ -1,0 +1,43 @@
+# ==============================================================================
+# Audio Craft Studio - Python Dependencies & Local Compute Requirements
+# ==============================================================================
+# Model Architecture Notes:
+#  - VibeVoice 1.5B Model: Requires >= 4GB VRAM (FP16/INT8), 8GB System RAM
+#  - VibeVoice 7.0B Model: Requires >= 12GB VRAM (INT8/4-bit) or >= 16GB-24GB VRAM (FP16), 16-32GB RAM
+# ==============================================================================
+
+# Core Deep Learning Framework (Install with CUDA 12.1+ for NVIDIA GPUs)
+# e.g.: pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+torch>=2.2.0
+torchaudio>=2.2.0
+
+# HuggingFace Model Weights & Transformer Architecture
+transformers>=4.40.0
+accelerate>=0.29.0
+safetensors>=0.4.3
+huggingface-hub>=0.22.0
+
+# Quantization & Memory Optimization (Crucial for 7B Model on 8GB-12GB GPUs)
+bitsandbytes>=0.43.0
+optimum>=1.19.0
+
+# Fast Audio Processing & Digital Signal Encoding
+soundfile>=0.12.1
+scipy>=1.12.0
+numpy>=1.26.0
+librosa>=0.10.1
+pydub>=0.25.1
+
+# High Performance API Server & Async Worker (For local backend proxy)
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.7.0
+python-multipart>=0.0.9
+
+# Utilities
+tqdm>=4.66.0
+rich>=13.7.0
+requests>=2.31.0
+
+# Optional Performance Boost for 7B Model (Requires CUDA compile toolchain):
+# flash-attn>=2.5.8
