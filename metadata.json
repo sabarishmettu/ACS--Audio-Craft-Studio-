@@ -1,0 +1,7 @@
+{
+  "name": "AudioCraft Studio - Long-Form Text to Speech AI Generator",
+  "description": "Production-grade AI text-to-speech studio. Transform 2 to 4 hour scripts into partitioned audio chunks, auto-execute batch speech synthesis with Gemini 3.1 TTS, preview waveforms, and export merged master tracks.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
