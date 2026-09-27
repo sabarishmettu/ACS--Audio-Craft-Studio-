@@ -9,6 +9,22 @@
 
 ---
 
+## 📸 Studio Interface Preview
+
+<div align="center">
+
+### 1. Studio Workspace & Intelligent Script Partitioning
+<img src="./Image%20references%20for%20README%20file%20Github/Screenshot%202026-09-27%20133305.png" alt="ACS Studio Workspace & Script Chunks" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.4);" />
+
+<br/><br/>
+
+### 2. Multi-Track Studio DAW Audio Timeline & Transport Engine
+<img src="./Image%20references%20for%20README%20file%20Github/Screenshot%202026-09-27%20134239.png" alt="ACS Multi-Track DAW Timeline & Audio Sequencer" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.4);" />
+
+</div>
+
+---
+
 ## 🌟 Key Features
 
 - ⚡ **Multi-Model Neural Acoustic Engines**:
