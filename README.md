@@ -106,7 +106,16 @@ GEMINI_API_KEY=your_google_gemini_api_key_here
 ```
 *(Get a free API key at [Google AI Studio](https://aistudio.google.com/)).*
 
-### Step 4: Run the Development Server
+### Step 4: Launch AudioCraft Studio
+
+#### Option A: One-Click Launcher (Windows)
+Simply **double-click [`start.bat`](file:///start.bat)** (or run `./start.ps1` in PowerShell).  
+It will automatically:
+1. Detect and warm up the local VibeVoice 1.5B GPU backend on port `8000`.
+2. Start the AudioCraft Studio studio server on port `3000`.
+3. Automatically launch your default web browser directly to **`http://localhost:3000/`**.
+
+#### Option B: Command Line (CLI)
 ```bash
 npm run dev
 ```
