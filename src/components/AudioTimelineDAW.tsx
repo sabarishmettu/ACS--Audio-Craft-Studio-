@@ -9,14 +9,18 @@ import {
   ZoomOut,
   ChevronDown,
   ChevronUp,
-  Eye,
   Lock,
+  Unlock,
+  Volume2,
+  VolumeX,
   ChevronLeft,
   ChevronRight,
   Disc,
   ArrowLeft,
   ArrowRight,
   GripHorizontal,
+  Magnet,
+  Maximize2,
 } from 'lucide-react';
 import { ScriptChunk } from '../types/tts';
 import { formatTime } from '../utils/audioUtils';
@@ -63,10 +67,17 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
   const [zoomLevel, setZoomLevel] = useState(100);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
 
+  // NLE / DAW Track Controls
+  const [isMuted, setIsMuted] = useState(false);
+  const [isLocked, setIsLocked] = useState(false);
+  const [trackVolume, setTrackVolume] = useState(1.0);
+  const [snappingEnabled, setSnappingEnabled] = useState(true);
+
   // Playhead interactive dragging state
   const [isDraggingPlayhead, setIsDraggingPlayhead] = useState(false);
   const isDraggingPlayheadRef = useRef(false);
   const currentTimeRef = useRef(0);
+  const liveScrubThrottleRef = useRef<number>(0);
 
   // Drag and drop chunk reordering state
   const [draggedChunkIndex, setDraggedChunkIndex] = useState<number | null>(null);
@@ -75,11 +86,13 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
   const timelineScrollRef = useRef<HTMLDivElement | null>(null);
   const rulerRef = useRef<HTMLDivElement | null>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
+  const preloadedAudioRef = useRef<HTMLAudioElement | null>(null);
+  const loadedChunkIdRef = useRef<string | null>(null);
   const currentChunkIndexRef = useRef<number>(0);
   const animFrameRef = useRef<number | null>(null);
   const isPlayingRef = useRef<boolean>(false);
 
-  // Keep refs updated
+  // Keep refs synchronized
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
@@ -92,7 +105,7 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
     currentTimeRef.current = currentTime;
   }, [currentTime]);
 
-  // ONLY show chunks that have actually been generated
+  // Show chunks that have been generated
   const generatedChunks = useMemo(
     () => chunks.filter((c) => c.status === 'generated' && !!c.audioBase64),
     [chunks]
@@ -128,12 +141,12 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
 
   // Compute exact pixel positions and widths of each chunk block on the timeline
   const chunkLayoutMap = useMemo(() => {
-    const PADDING_LEFT = 8; // px-2
-    const GAP = 6; // gap-1.5
+    const PADDING_LEFT = 8;
+    const GAP = 6;
     let currentLeft = PADDING_LEFT;
 
     return chunkTimelineData.map((chunk) => {
-      const width = Math.max(105, Math.min(230, (chunk.duration || 10) * 8 * blockScale));
+      const width = Math.max(105, Math.min(240, (chunk.duration || 10) * 8.5 * blockScale));
       const left = currentLeft;
       currentLeft += width + GAP;
       return {
@@ -150,7 +163,6 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
   const playheadPixelOffset = useMemo(() => {
     if (chunkLayoutMap.length === 0) return 8;
 
-    // Find the chunk corresponding to currentTime
     const activeChunk = chunkLayoutMap.find(
       (c) => currentTime >= c.startTime && currentTime <= c.endTime
     );
@@ -165,10 +177,39 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
       return chunkLayoutMap[0]?.left ?? 8;
     }
 
-    // Past all chunks
     const lastChunk = chunkLayoutMap[chunkLayoutMap.length - 1];
     return (lastChunk?.left ?? 0) + (lastChunk?.width ?? 0);
   }, [currentTime, chunkLayoutMap]);
+
+  // Robust finder to map any timestamp to the precise chunk and offset
+  const findChunkForTime = useCallback(
+    (timeSecs: number) => {
+      if (chunkTimelineData.length === 0) return { idx: -1, chunk: null, offset: 0 };
+
+      const clamped = Math.max(0, Math.min(totalGeneratedDuration, timeSecs));
+
+      for (let i = 0; i < chunkTimelineData.length; i++) {
+        const chunk = chunkTimelineData[i];
+        if (
+          clamped >= chunk.startTime &&
+          (clamped < chunk.endTime || i === chunkTimelineData.length - 1)
+        ) {
+          return {
+            idx: i,
+            chunk,
+            offset: Math.max(0, clamped - chunk.startTime),
+          };
+        }
+      }
+
+      return {
+        idx: 0,
+        chunk: chunkTimelineData[0],
+        offset: 0,
+      };
+    },
+    [chunkTimelineData, totalGeneratedDuration]
+  );
 
   // Convert clientX coordinate into an exact timeline second
   const getTimeFromPixelX = useCallback(
@@ -201,7 +242,19 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
         const chunk = chunkLayoutMap[i];
         if (relativeX >= chunk.left && relativeX <= chunk.left + chunk.width) {
           const chunkProgress = (relativeX - chunk.left) / chunk.width;
-          return chunk.startTime + chunkProgress * (chunk.endTime - chunk.startTime);
+          let calculatedTime = chunk.startTime + chunkProgress * (chunk.endTime - chunk.startTime);
+
+          if (snappingEnabled) {
+            const SNAP_THRESHOLD_PX = 8;
+            if (Math.abs(relativeX - chunk.left) <= SNAP_THRESHOLD_PX) {
+              return chunk.startTime;
+            }
+            if (Math.abs(relativeX - (chunk.left + chunk.width)) <= SNAP_THRESHOLD_PX) {
+              return chunk.endTime;
+            }
+          }
+
+          return calculatedTime;
         }
         if (i < chunkLayoutMap.length - 1) {
           const nextChunk = chunkLayoutMap[i + 1];
@@ -213,7 +266,7 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
 
       return 0;
     },
-    [totalTimelineDuration, timelineView, chunkLayoutMap, totalGeneratedDuration]
+    [totalTimelineDuration, timelineView, chunkLayoutMap, totalGeneratedDuration, snappingEnabled]
   );
 
   // Real-time synchronization when audio is played from an individual chunk card
@@ -224,37 +277,59 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
         setSelectedBlockId(match.id);
         const liveTime = match.startTime + externalPlayingTime;
         setCurrentTime(liveTime);
+        currentTimeRef.current = liveTime;
       }
     }
   }, [externalPlayingChunkId, externalPlayingTime, isPlaying, chunkTimelineData]);
 
-  // Format 0:00:00
-  const formatDawTime = (sec: number) => {
-    if (isNaN(sec) || sec < 0) return '0:00:00';
+  // Format Studio Timecode: HH:MM:SS.ms (DaVinci Resolve / CapCut standard)
+  const formatStudioTimecode = (sec: number) => {
+    if (isNaN(sec) || sec < 0) return '00:00:00.00';
     const hrs = Math.floor(sec / 3600);
     const mins = Math.floor((sec % 3600) / 60);
     const secs = Math.floor(sec % 60);
-    return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    const ms = Math.floor((sec % 1) * 100);
+    return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs
+      .toString()
+      .padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
   };
 
-  // Stop playback cleanup (NEVER resets currentTime on pause - true Studio DAW behavior)
+  // Instant, rock-solid stop/pause of playback
   const stopTimelinePlayback = useCallback((resetTime = false) => {
+    // 1. Immediately flag playback as stopped
+    isPlayingRef.current = false;
+    setIsPlaying(false);
+
+    // 2. Cancel animation frame
     if (animFrameRef.current) {
       cancelAnimationFrame(animFrameRef.current);
       animFrameRef.current = null;
     }
+
+    // 3. Immediately pause active HTML5 Audio element
     if (audioPlayerRef.current) {
       try {
         audioPlayerRef.current.pause();
       } catch (e) {
         console.warn('Audio pause error:', e);
       }
-      audioPlayerRef.current = null;
     }
+
+    // 4. Cancel any preloaded background audio
+    if (preloadedAudioRef.current) {
+      try {
+        preloadedAudioRef.current.pause();
+        preloadedAudioRef.current.src = '';
+      } catch (e) {}
+      preloadedAudioRef.current = null;
+    }
+
+    // 5. Cancel any Web Speech engine tasks
     stopAllSpeech();
-    setIsPlaying(false);
+
     if (resetTime) {
       setCurrentTime(0);
+      currentTimeRef.current = 0;
     }
   }, []);
 
@@ -271,15 +346,16 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
         if (!isDraggingPlayheadRef.current) {
           const live = getLiveTime();
           setCurrentTime(live);
+          currentTimeRef.current = live;
 
           // Auto-scroll timeline container to keep playhead in view
           if (timelineScrollRef.current && timelineView === 'chunks') {
             const container = timelineScrollRef.current;
             const playheadPx = playheadPixelOffset;
-            if (playheadPx > container.scrollLeft + container.clientWidth - 100) {
-              container.scrollLeft = playheadPx - 100;
-            } else if (playheadPx < container.scrollLeft + 50 && container.scrollLeft > 0) {
-              container.scrollLeft = Math.max(0, playheadPx - 50);
+            if (playheadPx > container.scrollLeft + container.clientWidth - 120) {
+              container.scrollLeft = playheadPx - 120;
+            } else if (playheadPx < container.scrollLeft + 60 && container.scrollLeft > 0) {
+              container.scrollLeft = Math.max(0, playheadPx - 60);
             }
           }
         }
@@ -295,6 +371,8 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
   // Play audio sequentially starting at chunk index with exact millisecond offset
   const playChunkAtIndex = useCallback(
     (idx: number, offsetSecs = 0) => {
+      if (!isPlayingRef.current) return;
+
       if (idx >= chunkTimelineData.length || idx < 0) {
         stopTimelinePlayback(false);
         return;
@@ -304,68 +382,156 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
       const targetChunk = chunkTimelineData[idx];
       setSelectedBlockId(targetChunk.id);
 
-      if (audioPlayerRef.current) {
-        try {
-          audioPlayerRef.current.pause();
-        } catch (e) {}
-      }
-      stopAllSpeech();
-
-      const audio = new Audio(`data:audio/wav;base64,${targetChunk.audioBase64}`);
-      audioPlayerRef.current = audio;
-
+      // Check if this chunk is Local Speech Synthesis
       const isLocal =
         targetChunk.selectedVoice?.includes('Local') ||
         targetChunk.selectedVoice?.includes('Web Synth') ||
         targetChunk.selectedVoice?.includes('Offline');
 
       if (isLocal) {
-        // Slice spoken text to start at the dragged word offset
+        // Stop any prior speech and pause HTML5 audio
+        stopAllSpeech();
+        if (audioPlayerRef.current) {
+          try {
+            audioPlayerRef.current.pause();
+          } catch (e) {}
+        }
+
         let spokenText = targetChunk.text;
+        const chunkDur = targetChunk.duration || 5;
         if (offsetSecs > 0) {
           const words = targetChunk.text.split(/\s+/).filter(Boolean);
-          const chunkDur = targetChunk.duration || 1;
           const progress = Math.min(0.95, Math.max(0, offsetSecs / chunkDur));
           const startWordIdx = Math.floor(words.length * progress);
           spokenText = words.slice(startWordIdx).join(' ');
         }
 
+        const startLocalTimestamp = performance.now() - offsetSecs * 1000;
+        const speed = targetChunk.speed || 1.0;
+        const pitch = 1.0 + (targetChunk.pitch || 0) / 10;
+        const gender = detectVoiceGender(targetChunk.selectedVoice);
+
         playSpeechUtterance(
           spokenText,
-          detectVoiceGender(targetChunk.selectedVoice),
-          targetChunk.speed || 1.0,
-          1.0 + (targetChunk.pitch || 0) / 10,
+          gender,
+          speed,
+          pitch,
           () => {
-            if (idx + 1 < chunkTimelineData.length) {
-              playChunkAtIndex(idx + 1, 0);
-            } else {
-              stopTimelinePlayback(false);
+            // ONLY advance if still playing!
+            if (!isPlayingRef.current) return;
+            if (currentChunkIndexRef.current === idx) {
+              if (idx + 1 < chunkTimelineData.length) {
+                const nextChunk = chunkTimelineData[idx + 1];
+                setCurrentTime(nextChunk.startTime);
+                currentTimeRef.current = nextChunk.startTime;
+                playChunkAtIndex(idx + 1, 0);
+              } else {
+                stopTimelinePlayback(false);
+              }
             }
           },
           targetChunk.selectedVoice
         );
+
+        const getLiveLocalTime = () => {
+          const elapsed = (performance.now() - startLocalTimestamp) / 1000;
+          return targetChunk.startTime + Math.min(chunkDur, Math.max(0, elapsed));
+        };
+
+        startProgressTracking(getLiveLocalTime);
+        return;
       }
 
-      // Robust offset applicator ensures audio starts at exact dragged position
-      const applyOffset = () => {
-        if (offsetSecs > 0) {
-          const targetTime = Math.max(0, offsetSecs);
-          if (Math.abs((audio.currentTime || 0) - targetTime) > 0.04) {
+      // Cloud / Gemini TTS Audio via HTML5 Audio element
+      stopAllSpeech();
+
+      // Preload next chunk audio buffer in the background for gapless handoff
+      if (idx + 1 < chunkTimelineData.length) {
+        const nextChunk = chunkTimelineData[idx + 1];
+        if (nextChunk.audioBase64) {
+          const preloadSrc =
+            nextChunk.audioUrl ||
+            (nextChunk.audioBase64.startsWith('data:')
+              ? nextChunk.audioBase64
+              : `data:audio/wav;base64,${nextChunk.audioBase64}`);
+          const preload = new Audio(preloadSrc);
+          preload.preload = 'auto';
+          preloadedAudioRef.current = preload;
+        }
+      }
+
+      const audioSrc =
+        targetChunk.audioUrl ||
+        (targetChunk.audioBase64?.startsWith('data:')
+          ? targetChunk.audioBase64
+          : `data:audio/wav;base64,${targetChunk.audioBase64}`);
+
+      let audio: HTMLAudioElement;
+      if (
+        audioPlayerRef.current &&
+        loadedChunkIdRef.current === targetChunk.id &&
+        targetChunk.audioBase64
+      ) {
+        audio = audioPlayerRef.current;
+        if (offsetSecs >= 0 && Math.abs((audio.currentTime || 0) - offsetSecs) > 0.05) {
+          try {
+            audio.currentTime = offsetSecs;
+          } catch (e) {}
+        }
+      } else {
+        if (audioPlayerRef.current) {
+          try {
+            audioPlayerRef.current.pause();
+          } catch (e) {}
+        }
+        audio = new Audio(audioSrc);
+        audioPlayerRef.current = audio;
+        loadedChunkIdRef.current = targetChunk.id;
+
+        const applyOffset = () => {
+          if (offsetSecs > 0) {
             try {
-              audio.currentTime = targetTime;
-            } catch (e) {
-              console.warn('Set currentTime warning:', e);
+              audio.currentTime = offsetSecs;
+            } catch (e) {}
+          }
+        };
+
+        applyOffset();
+        audio.addEventListener('loadedmetadata', applyOffset);
+        audio.addEventListener('canplay', applyOffset);
+
+        audio.addEventListener('timeupdate', () => {
+          if (audioPlayerRef.current && !isDraggingPlayheadRef.current && isPlayingRef.current) {
+            const chunkOffset = audioPlayerRef.current.currentTime || 0;
+            const live = targetChunk.startTime + chunkOffset;
+            setCurrentTime(live);
+            currentTimeRef.current = live;
+          }
+        });
+
+        audio.addEventListener('ended', () => {
+          if (!isPlayingRef.current) return;
+          if (currentChunkIndexRef.current === idx) {
+            if (idx + 1 < chunkTimelineData.length) {
+              const nextChunk = chunkTimelineData[idx + 1];
+              setCurrentTime(nextChunk.startTime);
+              currentTimeRef.current = nextChunk.startTime;
+              playChunkAtIndex(idx + 1, 0);
+            } else {
+              stopTimelinePlayback(false);
             }
           }
-        }
-      };
+        });
+      }
 
-      // Set immediately and attach to all lifecycle events
-      applyOffset();
-      audio.addEventListener('loadedmetadata', applyOffset);
-      audio.addEventListener('canplay', applyOffset);
-      audio.addEventListener('play', applyOffset);
-      audio.addEventListener('playing', applyOffset);
+      audio.muted = isMuted;
+      audio.volume = trackVolume;
+
+      if (offsetSecs > 0) {
+        try {
+          audio.currentTime = offsetSecs;
+        } catch (e) {}
+      }
 
       const getLiveCurrentTime = () => {
         if (!audioPlayerRef.current) return targetChunk.startTime;
@@ -374,90 +540,121 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
       };
 
       const handleStart = () => {
-        applyOffset();
+        if (!isPlayingRef.current) {
+          try {
+            audio.pause();
+          } catch (e) {}
+          return;
+        }
         startProgressTracking(getLiveCurrentTime);
       };
 
-      audio.addEventListener('timeupdate', () => {
-        if (audioPlayerRef.current && !isDraggingPlayheadRef.current) {
-          const chunkOffset = audioPlayerRef.current.currentTime || 0;
-          setCurrentTime(targetChunk.startTime + chunkOffset);
-        }
-      });
-
-      audio.addEventListener('ended', () => {
-        if (idx + 1 < chunkTimelineData.length) {
-          playChunkAtIndex(idx + 1, 0);
-        } else {
-          stopTimelinePlayback(false);
-        }
-      });
-
-      audio.play().then(handleStart).catch((err) => {
-        console.warn('Playback started with fallback:', err);
-        handleStart();
-      });
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            handleStart();
+          })
+          .catch((err) => {
+            if (!isPlayingRef.current) return;
+            console.warn('Playback started with fallback:', err);
+            handleStart();
+          });
+      }
     },
-    [chunkTimelineData, stopTimelinePlayback, startProgressTracking]
+    [chunkTimelineData, stopTimelinePlayback, startProgressTracking, isMuted, trackVolume]
   );
 
   // Master Final Audio Playback
   const playMasterAudio = useCallback(
     (startTimeSecs = 0) => {
+      if (!isPlayingRef.current) return;
       if (!masterAudioBase64) return;
-      if (audioPlayerRef.current) {
-        try {
-          audioPlayerRef.current.pause();
-        } catch (e) {}
+
+      const audioSrc = masterAudioBase64.startsWith('data:')
+        ? masterAudioBase64
+        : `data:audio/wav;base64,${masterAudioBase64}`;
+
+      let audio: HTMLAudioElement;
+      if (audioPlayerRef.current && loadedChunkIdRef.current === 'master') {
+        audio = audioPlayerRef.current;
+        if (startTimeSecs >= 0 && Math.abs((audio.currentTime || 0) - startTimeSecs) > 0.05) {
+          try {
+            audio.currentTime = startTimeSecs;
+          } catch (e) {}
+        }
+      } else {
+        if (audioPlayerRef.current) {
+          try {
+            audioPlayerRef.current.pause();
+          } catch (e) {}
+        }
+        audio = new Audio(audioSrc);
+        audioPlayerRef.current = audio;
+        loadedChunkIdRef.current = 'master';
+
+        const applyMasterOffset = () => {
+          if (startTimeSecs > 0) {
+            try {
+              audio.currentTime = startTimeSecs;
+            } catch (e) {}
+          }
+        };
+
+        applyMasterOffset();
+        audio.addEventListener('loadedmetadata', applyMasterOffset);
+        audio.addEventListener('canplay', applyMasterOffset);
+
+        audio.addEventListener('timeupdate', () => {
+          if (audioPlayerRef.current && !isDraggingPlayheadRef.current && isPlayingRef.current) {
+            const live = audioPlayerRef.current.currentTime;
+            setCurrentTime(live);
+            currentTimeRef.current = live;
+          }
+        });
+
+        audio.addEventListener('ended', () => {
+          stopTimelinePlayback(false);
+        });
       }
 
-      const audio = new Audio(`data:audio/wav;base64,${masterAudioBase64}`);
-      audioPlayerRef.current = audio;
+      audio.muted = isMuted;
+      audio.volume = trackVolume;
 
-      const applyMasterOffset = () => {
-        if (startTimeSecs > 0) {
-          const targetTime = Math.max(0, startTimeSecs);
-          if (Math.abs((audio.currentTime || 0) - targetTime) > 0.04) {
-            try {
-              audio.currentTime = targetTime;
-            } catch (e) {
-              console.warn('Set master currentTime warning:', e);
-            }
-          }
-        }
-      };
-
-      applyMasterOffset();
-      audio.addEventListener('loadedmetadata', applyMasterOffset);
-      audio.addEventListener('canplay', applyMasterOffset);
-      audio.addEventListener('play', applyMasterOffset);
-      audio.addEventListener('playing', applyMasterOffset);
+      if (startTimeSecs > 0) {
+        try {
+          audio.currentTime = startTimeSecs;
+        } catch (e) {}
+      }
 
       const getLiveMasterTime = () => {
         return audioPlayerRef.current ? audioPlayerRef.current.currentTime : startTimeSecs;
       };
 
       const handleMasterStart = () => {
-        applyMasterOffset();
+        if (!isPlayingRef.current) {
+          try {
+            audio.pause();
+          } catch (e) {}
+          return;
+        }
         startProgressTracking(getLiveMasterTime);
       };
 
-      audio.addEventListener('timeupdate', () => {
-        if (audioPlayerRef.current && !isDraggingPlayheadRef.current) {
-          setCurrentTime(audioPlayerRef.current.currentTime);
-        }
-      });
-
-      audio.addEventListener('ended', () => {
-        stopTimelinePlayback(false);
-      });
-
-      audio.play().then(handleMasterStart).catch((err) => {
-        console.warn('Master audio play warning:', err);
-        handleMasterStart();
-      });
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            handleMasterStart();
+          })
+          .catch((err) => {
+            if (!isPlayingRef.current) return;
+            console.warn('Master audio play warning:', err);
+            handleMasterStart();
+          });
+      }
     },
-    [masterAudioBase64, stopTimelinePlayback, startProgressTracking]
+    [masterAudioBase64, stopTimelinePlayback, startProgressTracking, isMuted, trackVolume]
   );
 
   // Seek audio and playhead to specific second
@@ -465,36 +662,115 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
     (seekTime: number, shouldContinuePlaying = isPlayingRef.current) => {
       const clampedTime = Math.max(0, Math.min(totalTimelineDuration, seekTime));
       setCurrentTime(clampedTime);
+      currentTimeRef.current = clampedTime;
 
-      if (shouldContinuePlaying) {
+      if (shouldContinuePlaying && isPlayingRef.current) {
         if (timelineView === 'final' && masterAudioBase64) {
           playMasterAudio(clampedTime);
         } else if (chunkTimelineData.length > 0) {
-          const targetIdx = chunkTimelineData.findIndex(
-            (c) => clampedTime >= c.startTime && clampedTime < c.endTime
-          );
-          const startIdx = targetIdx >= 0 ? targetIdx : 0;
-          const offset = targetIdx >= 0 ? clampedTime - chunkTimelineData[targetIdx].startTime : 0;
-          playChunkAtIndex(startIdx, offset);
+          const { idx, offset } = findChunkForTime(clampedTime);
+          if (idx >= 0) {
+            playChunkAtIndex(idx, offset);
+          }
         }
       } else {
-        // Paused state: set currentTime directly on player if active
-        if (audioPlayerRef.current) {
-          if (timelineView === 'final') {
-            audioPlayerRef.current.currentTime = clampedTime;
-          } else {
-            const targetChunk = chunkTimelineData.find(
-              (c) => clampedTime >= c.startTime && clampedTime <= c.endTime
-            );
-            if (targetChunk) {
-              const offset = clampedTime - targetChunk.startTime;
-              audioPlayerRef.current.currentTime = offset;
+        // Paused seeking: adjust internal position without playing
+        if (timelineView === 'final') {
+          if (audioPlayerRef.current && loadedChunkIdRef.current === 'master') {
+            try {
+              audioPlayerRef.current.currentTime = clampedTime;
+            } catch (e) {}
+          }
+        } else {
+          const { idx, chunk, offset } = findChunkForTime(clampedTime);
+          if (chunk) {
+            setSelectedBlockId(chunk.id);
+            currentChunkIndexRef.current = idx;
+            if (audioPlayerRef.current && loadedChunkIdRef.current === chunk.id) {
+              try {
+                audioPlayerRef.current.currentTime = offset;
+              } catch (e) {}
             }
           }
         }
       }
     },
-    [totalTimelineDuration, timelineView, masterAudioBase64, chunkTimelineData, playMasterAudio, playChunkAtIndex]
+    [
+      totalTimelineDuration,
+      timelineView,
+      masterAudioBase64,
+      chunkTimelineData,
+      findChunkForTime,
+      playMasterAudio,
+      playChunkAtIndex,
+    ]
+  );
+
+  // Live Audio Scrubbing Engine: synchronously updates position
+  const handleLiveScrub = useCallback(
+    (newTime: number) => {
+      const clamped = Math.max(0, Math.min(totalTimelineDuration, newTime));
+      setCurrentTime(clamped);
+      currentTimeRef.current = clamped;
+
+      if (!isPlayingRef.current) {
+        if (timelineView === 'final') {
+          if (audioPlayerRef.current && loadedChunkIdRef.current === 'master') {
+            try {
+              audioPlayerRef.current.currentTime = clamped;
+            } catch (e) {}
+          }
+        } else {
+          const { idx, chunk, offset } = findChunkForTime(clamped);
+          if (chunk) {
+            setSelectedBlockId(chunk.id);
+            currentChunkIndexRef.current = idx;
+            if (audioPlayerRef.current && loadedChunkIdRef.current === chunk.id) {
+              try {
+                audioPlayerRef.current.currentTime = offset;
+              } catch (e) {}
+            }
+          }
+        }
+        return;
+      }
+
+      const now = performance.now();
+      if (now - liveScrubThrottleRef.current < 40) {
+        return;
+      }
+      liveScrubThrottleRef.current = now;
+
+      if (timelineView === 'final' && masterAudioBase64) {
+        if (audioPlayerRef.current && loadedChunkIdRef.current === 'master') {
+          try {
+            audioPlayerRef.current.currentTime = clamped;
+          } catch (e) {}
+        } else {
+          playMasterAudio(clamped);
+        }
+      } else if (chunkTimelineData.length > 0) {
+        const { idx, chunk, offset } = findChunkForTime(clamped);
+        if (chunk) {
+          if (loadedChunkIdRef.current === chunk.id && audioPlayerRef.current) {
+            try {
+              audioPlayerRef.current.currentTime = offset;
+            } catch (e) {}
+          } else {
+            playChunkAtIndex(idx, offset);
+          }
+        }
+      }
+    },
+    [
+      totalTimelineDuration,
+      timelineView,
+      masterAudioBase64,
+      chunkTimelineData,
+      findChunkForTime,
+      playMasterAudio,
+      playChunkAtIndex,
+    ]
   );
 
   // Global window listeners for playhead drag scrubbing
@@ -503,13 +779,7 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
       if (!isDraggingPlayheadRef.current) return;
       e.preventDefault();
       const newTime = getTimeFromPixelX(e.clientX);
-      setCurrentTime(newTime);
-      if (audioPlayerRef.current && isPlayingRef.current) {
-        // Smoothly adjust audio position while dragging
-        if (timelineView === 'final') {
-          audioPlayerRef.current.currentTime = newTime;
-        }
-      }
+      handleLiveScrub(newTime);
     };
 
     const handleWindowMouseUp = (e: MouseEvent) => {
@@ -525,7 +795,7 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
       if (!isDraggingPlayheadRef.current || e.touches.length === 0) return;
       const touchX = e.touches[0].clientX;
       const newTime = getTimeFromPixelX(touchX);
-      setCurrentTime(newTime);
+      handleLiveScrub(newTime);
     };
 
     const handleWindowTouchEnd = (e: TouchEvent) => {
@@ -549,16 +819,16 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
       window.removeEventListener('touchmove', handleWindowTouchMove);
       window.removeEventListener('touchend', handleWindowTouchEnd);
     };
-  }, [getTimeFromPixelX, seekToTime, timelineView]);
+  }, [getTimeFromPixelX, handleLiveScrub, seekToTime]);
 
-  // Start playhead dragging on mouse down
+  // Start playhead dragging directly from the red handle
   const handlePlayheadMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setIsDraggingPlayhead(true);
     isDraggingPlayheadRef.current = true;
     const clickTime = getTimeFromPixelX(e.clientX);
-    setCurrentTime(clickTime);
+    handleLiveScrub(clickTime);
   };
 
   const handlePlayheadTouchStart = (e: React.TouchEvent) => {
@@ -567,13 +837,22 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
     setIsDraggingPlayhead(true);
     isDraggingPlayheadRef.current = true;
     const clickTime = getTimeFromPixelX(e.touches[0].clientX);
-    setCurrentTime(clickTime);
+    handleLiveScrub(clickTime);
+  };
+
+  // Ruler Scrubbing (Click & Drag ruler to scrub)
+  const handleRulerMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDraggingPlayhead(true);
+    isDraggingPlayheadRef.current = true;
+    const scrubTime = getTimeFromPixelX(e.clientX);
+    handleLiveScrub(scrubTime);
   };
 
   // Toggle Transport Play / Pause
-  const handleTogglePlay = () => {
-    if (isPlaying) {
-      stopTimelinePlayback(false); // DO NOT reset to 0; maintain exact paused location
+  const handleTogglePlay = useCallback(() => {
+    if (isPlayingRef.current) {
+      stopTimelinePlayback(false);
     } else {
       setIsPlaying(true);
       isPlayingRef.current = true;
@@ -583,58 +862,88 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
       if (timelineView === 'final' && masterAudioBase64) {
         playMasterAudio(targetTime);
       } else if (chunkTimelineData.length > 0) {
-        const targetIdx = chunkTimelineData.findIndex(
-          (c) => targetTime >= c.startTime && targetTime < c.endTime
-        );
-        const startIdx = targetIdx >= 0 ? targetIdx : 0;
-        const offset = targetIdx >= 0 ? targetTime - chunkTimelineData[targetIdx].startTime : 0;
-        playChunkAtIndex(startIdx, offset);
+        const { idx, offset } = findChunkForTime(targetTime);
+        if (idx >= 0) {
+          playChunkAtIndex(idx, offset);
+        }
       }
     }
-  };
+  }, [timelineView, masterAudioBase64, chunkTimelineData, findChunkForTime, playMasterAudio, playChunkAtIndex, stopTimelinePlayback]);
 
   const handleSkipNext = () => {
     if (chunkTimelineData.length === 0) return;
-    const currentIdx = chunkTimelineData.findIndex(
-      (c) => currentTime >= c.startTime && currentTime < c.endTime
-    );
-    const nextIdx = Math.min(chunkTimelineData.length - 1, (currentIdx >= 0 ? currentIdx : 0) + 1);
+    const { idx } = findChunkForTime(currentTimeRef.current);
+    const nextIdx = Math.min(chunkTimelineData.length - 1, (idx >= 0 ? idx : 0) + 1);
     const nextChunk = chunkTimelineData[nextIdx];
-    seekToTime(nextChunk.startTime);
+    seekToTime(nextChunk.startTime, isPlayingRef.current);
   };
 
   const handleSkipPrev = () => {
     if (chunkTimelineData.length === 0) return;
-    const currentIdx = chunkTimelineData.findIndex(
-      (c) => currentTime >= c.startTime && currentTime < c.endTime
-    );
-    const prevIdx = Math.max(0, (currentIdx >= 0 ? currentIdx : 0) - 1);
+    const { idx } = findChunkForTime(currentTimeRef.current);
+    const prevIdx = Math.max(0, (idx >= 0 ? idx : 0) - 1);
     const prevChunk = chunkTimelineData[prevIdx];
-    seekToTime(prevChunk.startTime);
+    seekToTime(prevChunk.startTime, isPlayingRef.current);
   };
 
-  // Click or drag on Timeline Track / Ruler to Seek
-  const handleTimelineMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (totalTimelineDuration <= 0) return;
-    // If clicking on buttons or draggable blocks, don't hijack
-    if ((e.target as HTMLElement).closest('button')) return;
+  // Professional NLE / DAW Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable
+      ) {
+        return;
+      }
 
-    e.preventDefault();
-    setIsDraggingPlayhead(true);
-    isDraggingPlayheadRef.current = true;
-    const seekTime = getTimeFromPixelX(e.clientX);
-    seekToTime(seekTime, isPlayingRef.current);
-  };
+      if (e.code === 'Space') {
+        e.preventDefault();
+        handleTogglePlay();
+      } else if (e.code === 'ArrowLeft') {
+        e.preventDefault();
+        const delta = e.shiftKey ? 5 : 1;
+        seekToTime(Math.max(0, currentTimeRef.current - delta), isPlayingRef.current);
+      } else if (e.code === 'ArrowRight') {
+        e.preventDefault();
+        const delta = e.shiftKey ? 5 : 1;
+        seekToTime(Math.min(totalTimelineDuration, currentTimeRef.current + delta), isPlayingRef.current);
+      } else if (e.code === 'Home') {
+        e.preventDefault();
+        seekToTime(0, isPlayingRef.current);
+      } else if (e.code === 'End') {
+        e.preventDefault();
+        seekToTime(totalTimelineDuration, isPlayingRef.current);
+      } else if (e.key === 'm' || e.key === 'M') {
+        setIsMuted((prev) => !prev);
+      } else if (e.key === 's' || e.key === 'S') {
+        setSnappingEnabled((prev) => !prev);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [totalTimelineDuration, handleTogglePlay, seekToTime]);
+
+  // Sync volume / mute to active audio element
+  useEffect(() => {
+    if (audioPlayerRef.current) {
+      audioPlayerRef.current.muted = isMuted;
+      audioPlayerRef.current.volume = trackVolume;
+    }
+  }, [isMuted, trackVolume]);
 
   // Drag & Drop Reordering handlers for blocks
   const handleDragStart = (e: React.DragEvent<HTMLDivElement>, index: number) => {
-    if (isDraggingPlayhead) return;
+    if (isDraggingPlayhead || isLocked) return;
     setDraggedChunkIndex(index);
     e.dataTransfer.setData('text/plain', String(index));
     e.dataTransfer.effectAllowed = 'move';
   };
 
   const handleDragOver = (e: React.DragEvent<HTMLDivElement>, index: number) => {
+    if (isLocked) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     if (dragOverIndex !== index) {
@@ -643,6 +952,7 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
   };
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>, targetIndex: number) => {
+    if (isLocked) return;
     e.preventDefault();
     setDragOverIndex(null);
     if (draggedChunkIndex !== null && draggedChunkIndex !== targetIndex) {
@@ -661,6 +971,7 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
   // Manual Shift Left / Right
   const handleShiftChunk = (chunkId: string, direction: 'left' | 'right', e: React.MouseEvent) => {
     e.stopPropagation();
+    if (isLocked) return;
     if (onMoveChunk) {
       onMoveChunk(chunkId, direction);
     }
@@ -668,16 +979,17 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
 
   const handleScrollLeft = () => {
     if (timelineScrollRef.current) {
-      timelineScrollRef.current.scrollBy({ left: -300, behavior: 'smooth' });
+      timelineScrollRef.current.scrollBy({ left: -320, behavior: 'smooth' });
     }
   };
 
   const handleScrollRight = () => {
     if (timelineScrollRef.current) {
-      timelineScrollRef.current.scrollBy({ left: 300, behavior: 'smooth' });
+      timelineScrollRef.current.scrollBy({ left: 320, behavior: 'smooth' });
     }
   };
 
+  // Ensure stop on unmount
   useEffect(() => {
     return () => {
       stopTimelinePlayback(false);
@@ -690,19 +1002,15 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
       ? Math.min(100, Math.max(0, (currentTime / masterDuration) * 100))
       : 0;
 
-  // Ruler tick markings
+  // Studio Ruler tick markings
   const rulerTicks = useMemo(() => {
-    const maxMins = Math.max(10, Math.ceil(totalTimelineDuration / 60));
-    const intervalMins = maxMins > 60 ? 10 : maxMins > 20 ? 5 : 1;
+    const maxSecs = Math.max(60, Math.ceil(totalTimelineDuration));
+    const step = maxSecs > 300 ? 30 : maxSecs > 120 ? 15 : maxSecs > 30 ? 5 : 2;
     const ticks = [];
-    for (let m = 0; m <= maxMins; m += intervalMins) {
-      const hrs = Math.floor(m / 60);
-      const mins = m % 60;
-      if (hrs > 0) {
-        ticks.push(`${hrs}:${mins.toString().padStart(2, '0')}:00`);
-      } else {
-        ticks.push(`${mins}:00`);
-      }
+    for (let s = 0; s <= maxSecs; s += step) {
+      const mins = Math.floor(s / 60);
+      const secs = s % 60;
+      ticks.push(`${mins}:${secs.toString().padStart(2, '0')}`);
     }
     return ticks;
   }, [totalTimelineDuration]);
@@ -713,16 +1021,16 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
         isDraggingPlayhead ? 'cursor-ew-resize' : ''
       }`}
     >
-      {/* Header Bar */}
+      {/* Studio Header Bar */}
       <div className="flex items-center justify-between border-b border-slate-800/80 px-4 py-2 bg-[#0c101c]">
-        {/* Left: Title & View Switch Pills */}
+        {/* Left: Title, View Switcher & Snap Toggle */}
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
-            <div className="flex h-5 w-5 items-center justify-center rounded bg-blue-600 text-white font-mono text-[11px] font-bold shadow-xs">
+            <div className="flex h-5 w-5 items-center justify-center rounded bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-mono text-[11px] font-bold shadow-xs">
               <Activity className="h-3 w-3" />
             </div>
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 font-['Syne',sans-serif]">
-              7. Audio Timeline
+              7. Audio Timeline (Studio DAW)
             </h3>
           </div>
 
@@ -752,16 +1060,26 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              Final Audio View {masterAudioBase64 ? '✓' : ''}
+              Master Audio View {masterAudioBase64 ? '✓' : ''}
             </button>
           </div>
 
-          <span className="hidden xl:inline-block text-[11px] text-slate-500 font-mono">
-            (Drag red playhead to scrub audio • ⇄ Shift chunks)
-          </span>
+          {/* Magnetic Snapping Indicator */}
+          <button
+            onClick={() => setSnappingEnabled(!snappingEnabled)}
+            className={`flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] font-mono transition-colors ${
+              snappingEnabled
+                ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                : 'bg-slate-900 text-slate-500 border-slate-800 hover:text-slate-300'
+            }`}
+            title="Toggle Magnetic Snapping (Shortcut: S)"
+          >
+            <Magnet className="h-3 w-3" />
+            <span>Snap {snappingEnabled ? 'ON' : 'OFF'}</span>
+          </button>
         </div>
 
-        {/* Center: Transport Player Controls */}
+        {/* Center: Transport Controls & Studio Timecode */}
         <div className="flex items-center gap-3">
           <button
             onClick={handleSkipPrev}
@@ -775,8 +1093,12 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
           <button
             onClick={handleTogglePlay}
             disabled={totalTimelineDuration === 0}
-            className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-slate-950 hover:bg-slate-200 shadow-md transition-all active:scale-95 disabled:opacity-40"
-            title={isPlaying ? 'Pause' : 'Play timeline audio in real-time'}
+            className={`flex h-7 w-7 items-center justify-center rounded-full shadow-md transition-all active:scale-95 disabled:opacity-40 ${
+              isPlaying
+                ? 'bg-amber-400 text-slate-950 hover:bg-amber-300'
+                : 'bg-white text-slate-950 hover:bg-slate-200'
+            }`}
+            title={isPlaying ? 'Pause (Space)' : 'Play timeline audio (Space)'}
           >
             {isPlaying ? (
               <Pause className="h-3.5 w-3.5 fill-current" />
@@ -794,23 +1116,49 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
             <SkipForward className="h-3.5 w-3.5 fill-current" />
           </button>
 
-          {/* Timecode display */}
+          {/* Studio Master Timecode Display */}
           <div
             className={`font-mono text-xs font-semibold tabular-nums px-2.5 py-1 rounded-md border transition-colors ${
               isDraggingPlayhead
-                ? 'bg-red-950/80 text-red-300 border-red-500 shadow-sm'
-                : 'bg-slate-950 text-sky-400 border-slate-800'
+                ? 'bg-red-950/90 text-red-300 border-red-500 shadow-sm'
+                : isPlaying
+                ? 'bg-blue-950/80 text-sky-300 border-blue-600/60 shadow-xs'
+                : 'bg-slate-950 text-slate-300 border-slate-800'
             }`}
           >
-            <span>{formatDawTime(currentTime)}</span>
-            <span className="text-slate-600 mx-1">/</span>
-            <span className="text-slate-400">{formatDawTime(totalTimelineDuration)}</span>
+            <span>{formatStudioTimecode(currentTime)}</span>
+            <span className="text-slate-600 mx-1.5">/</span>
+            <span className="text-slate-400">{formatStudioTimecode(totalTimelineDuration)}</span>
           </div>
         </div>
 
-        {/* Right: Zoom, Fit, Collapse */}
-        <div className="flex items-center gap-2 text-xs text-slate-400">
-          {/* Zoom */}
+        {/* Right: Track Volume, Zoom & Collapse */}
+        <div className="flex items-center gap-2.5 text-xs text-slate-400">
+          {/* Mute & Track Master Volume */}
+          <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-800 rounded-md px-2 py-0.5">
+            <button
+              onClick={() => setIsMuted(!isMuted)}
+              className={`hover:text-white ${isMuted ? 'text-rose-400' : 'text-slate-300'}`}
+              title={isMuted ? 'Unmute track (M)' : 'Mute track (M)'}
+            >
+              {isMuted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+            </button>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              value={isMuted ? 0 : trackVolume}
+              onChange={(e) => {
+                setTrackVolume(parseFloat(e.target.value));
+                if (isMuted) setIsMuted(false);
+              }}
+              className="w-14 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+              title="Track Volume"
+            />
+          </div>
+
+          {/* Zoom Level */}
           <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-800 rounded-md px-2 py-0.5">
             <button
               onClick={() => setZoomLevel((z) => Math.max(50, z - 25))}
@@ -819,7 +1167,7 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
             >
               <ZoomOut className="h-3 w-3" />
             </button>
-            <span className="font-mono text-[11px] text-slate-300 w-10 text-center">
+            <span className="font-mono text-[11px] text-slate-300 w-9 text-center">
               {zoomLevel}%
             </span>
             <button
@@ -833,9 +1181,11 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
 
           <button
             onClick={() => setZoomLevel(100)}
-            className="rounded bg-slate-950 border border-slate-800 px-2 py-1 text-[11px] text-slate-300 hover:text-white transition-colors"
+            className="flex items-center gap-1 rounded bg-slate-950 border border-slate-800 px-2 py-1 text-[11px] text-slate-300 hover:text-white transition-colors"
+            title="Reset Zoom to 100%"
           >
-            Fit to Screen
+            <Maximize2 className="h-3 w-3" />
+            <span>Fit</span>
           </button>
 
           <button
@@ -848,18 +1198,18 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
         </div>
       </div>
 
-      {/* Multitrack Canvas */}
+      {/* Multitrack Studio Canvas */}
       {!isCollapsed && (
         <div className="relative flex flex-col bg-[#070b14] overflow-hidden">
-          {/* Timeline Ruler with click-and-drag scrubbing */}
+          {/* Studio Timeline Time Ruler */}
           <div
             ref={rulerRef}
-            onMouseDown={handleTimelineMouseDown}
-            className="h-6 flex items-center border-b border-slate-800/80 bg-[#090d18] pl-28 pr-4 text-[10px] font-mono text-slate-500 overflow-hidden cursor-ew-resize hover:bg-[#0d1222] transition-colors relative"
-            title="Click or drag anywhere on ruler to scrub playhead"
+            onMouseDown={handleRulerMouseDown}
+            className="h-6 flex items-center border-b border-slate-800/80 bg-[#090d18] pl-32 pr-4 text-[10px] font-mono text-slate-500 overflow-hidden cursor-ew-resize hover:bg-[#0e1424] transition-colors relative select-none"
+            title="Click or drag ruler to scrub audio playhead live"
           >
             <div className="flex items-center justify-between w-full pointer-events-none">
-              {rulerTicks.slice(0, 15).map((tick, idx) => (
+              {rulerTicks.slice(0, 18).map((tick, idx) => (
                 <div key={idx} className="flex flex-col items-center">
                   <div className="h-1.5 w-px bg-slate-700 mb-0.5" />
                   <span>{tick}</span>
@@ -868,36 +1218,59 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
             </div>
           </div>
 
-          {/* Multitrack Track Row */}
-          <div className="flex items-center relative h-18 bg-[#060a12] group">
-            {/* Left Track Header: < VOICEOVER Eye Lock */}
-            <div className="w-28 shrink-0 h-full bg-[#0a0e1c] border-r border-slate-800 flex items-center justify-between px-2.5 z-20 shadow-md">
-              <div className="flex items-center gap-1">
-                <ChevronLeft className="h-3 w-3 text-slate-500" />
-                <span className="text-[10px] font-bold text-slate-300 tracking-wider font-mono">
-                  VOICEOVER
-                </span>
+          {/* Multitrack Audio Row */}
+          <div className="flex items-center relative h-20 bg-[#060a12] group">
+            {/* Left Track Header: A1 • VOICEOVER */}
+            <div className="w-32 shrink-0 h-full bg-[#0a0e1c] border-r border-slate-800 flex flex-col justify-between p-2 z-20 shadow-md">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1">
+                  <span className="text-[9px] font-bold px-1 py-0.2 rounded bg-blue-600 text-white font-mono">
+                    A1
+                  </span>
+                  <span className="text-[10px] font-bold text-slate-200 tracking-wider font-mono">
+                    VOICEOVER
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 text-slate-500">
+                  <button
+                    onClick={() => setIsLocked(!isLocked)}
+                    className={`hover:text-slate-300 ${isLocked ? 'text-amber-400' : ''}`}
+                    title={isLocked ? 'Unlock Track' : 'Lock Track'}
+                  >
+                    {isLocked ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3" />}
+                  </button>
+                </div>
               </div>
-              <div className="flex items-center gap-1 text-slate-500">
-                <Eye className="h-3 w-3 hover:text-slate-300 cursor-pointer" />
-                <Lock className="h-3 w-3 hover:text-slate-300 cursor-pointer" />
+
+              {/* Track Status & Solo/Mute */}
+              <div className="flex items-center justify-between text-[9px] font-mono text-slate-400">
+                <span className="text-[9px] text-slate-500">Stereo 44.1k</span>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setIsMuted(!isMuted)}
+                    className={`px-1 rounded text-[9px] font-bold ${
+                      isMuted ? 'bg-rose-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    M
+                  </button>
+                </div>
               </div>
             </div>
 
             {/* Scrollable Track Blocks Area */}
             <div
               ref={timelineScrollRef}
-              onMouseDown={handleTimelineMouseDown}
-              className="flex-1 h-full relative flex items-center gap-1.5 overflow-x-auto px-2 py-1.5 scrollbar-none cursor-pointer"
+              className="flex-1 h-full relative flex items-center gap-1.5 overflow-x-auto px-2 py-1.5 scrollbar-none"
             >
               {timelineView === 'final' && masterAudioBase64 ? (
                 /* Master Audio Track */
-                <div className="flex-1 h-14 rounded-lg border border-emerald-500/40 bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-600 p-2 flex items-center justify-between shadow-lg relative overflow-hidden">
+                <div className="flex-1 h-16 rounded-lg border border-emerald-500/40 bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-600 p-2 flex items-center justify-between shadow-lg relative overflow-hidden">
                   <div className="flex items-center gap-2 text-white font-mono font-bold text-xs z-10">
                     <Disc className={`h-4 w-4 ${isPlaying ? 'animate-spin' : ''}`} />
                     <span>MASTER STUDIO AUDIO TRACK</span>
                   </div>
-                  <div className="flex items-center gap-0.5 h-6 w-1/2 z-10">
+                  <div className="flex items-center gap-0.5 h-7 w-1/2 z-10">
                     {Array.from({ length: 48 }).map((_, i) => (
                       <div
                         key={i}
@@ -936,7 +1309,7 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
                   return (
                     <div
                       key={chunk.id}
-                      draggable={!isDraggingPlayhead}
+                      draggable={!isLocked}
                       onDragStart={(e) => handleDragStart(e, idx)}
                       onDragOver={(e) => handleDragOver(e, idx)}
                       onDrop={(e) => handleDrop(e, idx)}
@@ -945,13 +1318,12 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
                       onClick={(e) => {
                         e.stopPropagation();
                         setSelectedBlockId(chunk.id);
-                        seekToTime(chunk.startTime, isPlayingRef.current);
                         if (onSelectChunk) onSelectChunk(chunk.id);
                         const el = document.getElementById(`chunk-card-${chunk.id}`);
                         if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
                       }}
-                      className={`group/block relative shrink-0 h-14 rounded-lg border bg-gradient-to-r ${colorClass} p-1.5 flex flex-col justify-between shadow-md transition-all duration-150 cursor-grab active:cursor-grabbing ${
-                        isBeingDragged ? 'opacity-40 scale-95 border-dashed border-white' : ''
+                      className={`group/block relative shrink-0 h-16 rounded-lg border bg-gradient-to-r ${colorClass} p-1.5 flex flex-col justify-between shadow-md transition-all duration-150 cursor-grab active:cursor-grabbing ${
+                        isBeingDragged ? 'opacity-40 scale-95 border-dashed border-white ring-2 ring-white' : ''
                       } ${
                         isDropTarget ? 'ring-4 ring-amber-400 scale-105 z-20' : ''
                       } ${
@@ -961,19 +1333,19 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
                           ? 'ring-2 ring-sky-300'
                           : 'opacity-90 hover:opacity-100 hover:scale-[1.02]'
                       }`}
-                      title="Drag left/right to reorder or click to play"
+                      title="Drag to reorder clips (Ripple Edit)"
                     >
                       {/* Top Row: Chunk title & Shift arrows */}
                       <div className="flex items-center justify-between text-[10px] font-mono font-bold text-white drop-shadow-sm">
-                        <div className="flex items-center gap-1">
-                          <GripHorizontal className="h-3 w-3 opacity-60 group-hover/block:opacity-100" />
+                        <div className="flex items-center gap-1 pointer-events-none">
+                          <GripHorizontal className="h-3.5 w-3.5 opacity-80 group-hover/block:opacity-100" />
                           <span>CHUNK {String(chunk.index).padStart(3, '0')}</span>
                         </div>
 
                         {/* Shift Left & Right Buttons */}
-                        <div className="flex items-center gap-0.5 opacity-0 group-hover/block:opacity-100 transition-opacity bg-black/40 rounded px-1">
+                        <div className="flex items-center gap-0.5 opacity-0 group-hover/block:opacity-100 transition-opacity bg-black/40 rounded px-1 z-10">
                           <button
-                            disabled={idx === 0}
+                            disabled={idx === 0 || isLocked}
                             onClick={(e) => handleShiftChunk(chunk.id, 'left', e)}
                             className="p-0.5 hover:text-amber-300 disabled:opacity-20"
                             title="Shift Left (earlier)"
@@ -981,7 +1353,7 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
                             <ArrowLeft className="h-2.5 w-2.5" />
                           </button>
                           <button
-                            disabled={idx === chunkTimelineData.length - 1}
+                            disabled={idx === chunkTimelineData.length - 1 || isLocked}
                             onClick={(e) => handleShiftChunk(chunk.id, 'right', e)}
                             className="p-0.5 hover:text-amber-300 disabled:opacity-20"
                             title="Shift Right (later)"
@@ -992,14 +1364,14 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
                       </div>
 
                       {/* Waveform graphic bars */}
-                      <div className="flex items-center gap-0.5 h-3.5 w-full pointer-events-none">
-                        {Array.from({ length: Math.min(18, Math.floor(calculatedWidth / 7)) }).map(
+                      <div className="flex items-center gap-0.5 h-4 w-full pointer-events-none">
+                        {Array.from({ length: Math.min(22, Math.floor(calculatedWidth / 6.5)) }).map(
                           (_, barI) => {
-                            const h = 20 + (((barI * 17 + (chunk.index || 1) * 7) % 80) + 10);
+                            const h = 25 + (((barI * 17 + (chunk.index || 1) * 7) % 75) + 10);
                             return (
                               <div
                                 key={barI}
-                                className="flex-1 bg-white/70 rounded-full"
+                                className="flex-1 bg-white/75 rounded-full"
                                 style={{ height: `${h}%` }}
                               />
                             );
@@ -1009,7 +1381,7 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
 
                       {/* Bottom Time & Drag hint */}
                       <div className="flex items-center justify-between text-[9px] font-mono text-white/90 drop-shadow-sm pointer-events-none">
-                        <span className="text-[8px] opacity-70">⇄ Drag</span>
+                        <span className="text-[8px] opacity-80 font-medium">⇄ Drag Clip</span>
                         <span>{formatTime(chunk.duration)}</span>
                       </div>
                     </div>
@@ -1017,23 +1389,23 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
                 })
               )}
 
-              {/* Real-Time Draggable DAW Red Playhead Scrubber */}
+              {/* Dedicated Red Playhead Handle */}
               {totalTimelineDuration > 0 && (
                 <div
                   onMouseDown={handlePlayheadMouseDown}
                   onTouchStart={handlePlayheadTouchStart}
-                  className={`absolute top-0 bottom-0 z-40 cursor-ew-resize select-none transition-shadow ${
-                    isDraggingPlayhead ? 'scale-105' : ''
+                  className={`absolute top-0 bottom-0 z-40 cursor-grab active:cursor-grabbing select-none transition-shadow ${
+                    isDraggingPlayhead ? 'scale-105 cursor-grabbing' : ''
                   }`}
                   style={{
                     left:
                       timelineView === 'final'
                         ? `${masterPercent}%`
                         : `${playheadPixelOffset}px`,
-                    width: '24px',
-                    marginLeft: '-12px', // centered over line
+                    width: '28px',
+                    marginLeft: '-14px',
                   }}
-                  title="Drag red playhead to scrub anywhere on the timeline"
+                  title="Grab and drag red handle to scrub audio"
                 >
                   {/* Visual Red Line */}
                   <div
@@ -1047,20 +1419,22 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
 
                   {/* Top Red Handle Diamond / Grip */}
                   <div
-                    className={`absolute -top-1 left-1/2 -translate-x-1/2 w-3.5 h-3.5 bg-red-500 rotate-45 border-2 border-white shadow-md transition-transform ${
+                    className={`absolute -top-1.5 left-1/2 -translate-x-1/2 w-4 h-4 bg-red-500 rotate-45 border-2 border-white shadow-md transition-transform pointer-events-none ${
                       isDraggingPlayhead ? 'scale-125 bg-red-400' : 'hover:scale-110'
                     }`}
                   />
 
                   {/* Floating Time Scrubber Pill */}
                   <div
-                    className={`absolute -top-6.5 left-1/2 -translate-x-1/2 rounded px-1.5 py-0.5 text-[9px] font-mono font-bold text-white shadow-xl whitespace-nowrap transition-all pointer-events-none ${
+                    className={`absolute -top-7 left-1/2 -translate-x-1/2 rounded px-1.5 py-0.5 text-[9px] font-mono font-bold text-white shadow-xl whitespace-nowrap transition-all pointer-events-none ${
                       isDraggingPlayhead
                         ? 'bg-red-500 border-2 border-white scale-110 shadow-red-500/50'
+                        : isPlaying
+                        ? 'bg-blue-600 border border-blue-400'
                         : 'bg-red-600 border border-red-400'
                     }`}
                   >
-                    {formatDawTime(currentTime)}
+                    {formatStudioTimecode(currentTime)}
                   </div>
                 </div>
               )}
@@ -1069,7 +1443,7 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
             {/* Left/Right Scroll Arrows */}
             <button
               onClick={handleScrollLeft}
-              className="absolute left-30 top-1/2 -translate-y-1/2 z-20 h-6 w-6 rounded-full bg-slate-900/90 border border-slate-700 text-slate-300 hover:text-white flex items-center justify-center shadow-lg transition-colors"
+              className="absolute left-34 top-1/2 -translate-y-1/2 z-20 h-6 w-6 rounded-full bg-slate-900/90 border border-slate-700 text-slate-300 hover:text-white flex items-center justify-center shadow-lg transition-colors"
             >
               <ChevronLeft className="h-3.5 w-3.5" />
             </button>

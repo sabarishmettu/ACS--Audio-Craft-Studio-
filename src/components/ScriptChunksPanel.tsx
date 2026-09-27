@@ -152,9 +152,8 @@ export const ScriptChunksPanel: React.FC<ScriptChunksPanelProps> = ({
       }
       stopAllSpeech();
 
-      // If local synth voice, also trigger utterance for spoken clarity
-      const isLocal = chunk.selectedVoice?.includes('Local') || chunk.selectedVoice?.includes('Web Synth') || chunk.selectedVoice?.includes('Offline');
-      if (isLocal) {
+      // Only fallback to speech utterance if audioBase64 is not present
+      if (!chunk.audioBase64 && chunk.text) {
         const rawVoiceName = chunk.selectedVoice || '';
         const activeVoiceObj = voices.find(
           (v) => v.id === rawVoiceName || rawVoiceName.startsWith(v.id) || rawVoiceName.includes(v.name)
@@ -171,9 +170,9 @@ export const ScriptChunksPanel: React.FC<ScriptChunksPanelProps> = ({
           },
           activeVoiceObj?.id || chunk.selectedVoice
         );
+      } else {
+        audio.play().catch(console.error);
       }
-
-      audio.play().catch(console.error);
       setPlayingChunkId(chunk.id);
     }
   };

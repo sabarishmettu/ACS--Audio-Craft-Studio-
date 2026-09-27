@@ -8,6 +8,10 @@ let currentActiveUtterance: SpeechSynthesisUtterance | null = null;
 export function stopAllSpeech(): void {
   if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
     try {
+      if (currentActiveUtterance) {
+        currentActiveUtterance.onend = null;
+        currentActiveUtterance.onerror = null;
+      }
       window.speechSynthesis.cancel();
       currentActiveUtterance = null;
     } catch (e) {
@@ -19,7 +23,10 @@ export function stopAllSpeech(): void {
 export function pauseSpeech(): void {
   if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
     try {
-      window.speechSynthesis.pause();
+      if (currentActiveUtterance) {
+        currentActiveUtterance.onend = null;
+        currentActiveUtterance.onerror = null;
+      }
       window.speechSynthesis.cancel();
       currentActiveUtterance = null;
     } catch (e) {
@@ -236,9 +243,12 @@ export function playSpeechUtterance(
     if (onEnd) onEnd();
   };
 
-  utterance.onerror = (e) => {
-    console.warn('Speech error:', e);
+  utterance.onerror = (e: any) => {
     currentActiveUtterance = null;
+    if (e?.error === 'canceled' || e?.error === 'interrupted') {
+      return;
+    }
+    console.warn('Speech error:', e);
     if (onEnd) onEnd();
   };
 
