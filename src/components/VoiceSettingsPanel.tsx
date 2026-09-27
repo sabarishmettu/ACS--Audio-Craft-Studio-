@@ -6,16 +6,16 @@ import { AUDIO_TAG_PRESETS } from '../utils/audioUtils';
 
 export const TTS_MODELS = [
   {
-    id: 'vibevoice-7b',
-    name: 'VibeVoice 7B (Flagship Deep Cinematic & Multi-Role)',
-    badge: 'VibeVoice 7B',
-    description: '7 Billion parameter acoustic architecture. Ultra-realistic multi-speaker dialogue, emotion transfer, deep dramatic nuance, and cinematic presence.',
-  },
-  {
     id: 'vibevoice-1.5b',
     name: 'VibeVoice 1.5B (Fast Conversational & Multi-Speaker)',
     badge: 'VibeVoice 1.5B',
     description: 'Lightweight 1.5B parameter acoustic LLM. Low latency, conversational cadence, natural breathing, and dynamic pacing.',
+  },
+  {
+    id: 'vibevoice-7b',
+    name: 'VibeVoice 7B (Flagship Deep Cinematic & Multi-Role)',
+    badge: 'VibeVoice 7B',
+    description: '7 Billion parameter acoustic architecture. Ultra-realistic multi-speaker dialogue, emotion transfer, deep dramatic nuance, and cinematic presence.',
   },
   {
     id: 'gemini-3.8-flash-lite-tts',

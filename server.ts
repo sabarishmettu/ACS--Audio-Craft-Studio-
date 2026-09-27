@@ -3,6 +3,9 @@ import { GoogleGenAI } from '@google/genai';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import { spawn, ChildProcess } from 'child_process';
+import fs from 'fs';
+import JSZip from 'jszip';
 
 dotenv.config();
 
@@ -11,6 +14,79 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
+const VIBEVOICE_SERVER_URL = process.env.VIBEVOICE_SERVER_URL || 'http://127.0.0.1:8000';
+const VIBEVOICE_PYTHON = process.env.VIBEVOICE_PYTHON || 'C:\\Users\\rayud\\OneDrive\\Desktop\\Projects\\VibeVoice\\.venv\\Scripts\\python.exe';
+
+let vibeVoiceProcess: ChildProcess | null = null;
+let isStartingVibeVoice = false;
+
+async function checkVibeVoiceHealth(): Promise<{ ok: boolean; data?: any }> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2000);
+    const resp = await fetch(`${VIBEVOICE_SERVER_URL}/health`, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (resp.ok) {
+      const data = await resp.json();
+      return { ok: true, data };
+    }
+  } catch {
+    // not reachable
+  }
+  return { ok: false };
+}
+
+async function ensureVibeVoiceServer(): Promise<boolean> {
+  const current = await checkVibeVoiceHealth();
+  if (current.ok) {
+    return true;
+  }
+
+  if (isStartingVibeVoice) {
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const check = await checkVibeVoiceHealth();
+      if (check.ok) return true;
+    }
+    return false;
+  }
+
+  if (!fs.existsSync(VIBEVOICE_PYTHON)) {
+    console.warn(`[VibeVoice] Python binary not found at: ${VIBEVOICE_PYTHON}`);
+    return false;
+  }
+
+  isStartingVibeVoice = true;
+  console.log(`[VibeVoice] 🚀 Starting local VibeVoice Neural Engine backend on port 8000...`);
+
+  const serverScript = path.join(__dirname, 'scripts', 'run_vibevoice_server.py');
+  vibeVoiceProcess = spawn(VIBEVOICE_PYTHON, [serverScript, '--port', '8000'], {
+    cwd: __dirname,
+    stdio: 'inherit',
+    detached: false,
+    shell: false,
+  });
+
+  vibeVoiceProcess.on('exit', (code) => {
+    console.log(`[VibeVoice] Server process terminated with code: ${code}`);
+    vibeVoiceProcess = null;
+    isStartingVibeVoice = false;
+  });
+
+  for (let i = 0; i < 35; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const check = await checkVibeVoiceHealth();
+    if (check.ok) {
+      console.log(`[VibeVoice] ✅ Local Neural Server is online and connected at ${VIBEVOICE_SERVER_URL}!`);
+      isStartingVibeVoice = false;
+      return true;
+    }
+  }
+
+  isStartingVibeVoice = false;
+  return false;
+}
+
 
 // Support large text scripts (2 to 4 hours of text) and audio payloads
 app.use(express.json({ limit: '100mb' }));
@@ -70,6 +146,7 @@ export const GEMINI_VOICES = [
 export const VIBEVOICE_PROFILES = [
   { id: 'en-Alice_woman', name: 'en-Alice_woman (English - Female / Woman)', gender: 'Female', description: 'VibeVoice English expressive female persona with articulate storytelling and natural cadence', tags: ['VibeVoice', 'English', 'Woman', 'Expressive'] },
   { id: 'en-Carter_man', name: 'en-Carter_man (English - Male / Man)', gender: 'Male', description: 'VibeVoice English dynamic male persona with confident pacing and versatile narration', tags: ['VibeVoice', 'English', 'Man', 'Dynamic'] },
+  { id: 'en-Derek', name: 'en-Derek (English - Male / Fun & Energetic)', gender: 'Male', description: 'VibeVoice English lively, energetic male voice with dynamic inflection and natural conversational tone', tags: ['VibeVoice', 'English', 'Man', 'Energetic'] },
   { id: 'en-Frank_man', name: 'en-Frank_man (English - Male / Man)', gender: 'Male', description: 'VibeVoice English deep male voice with rich authoritative timbre and cinematic presence', tags: ['VibeVoice', 'English', 'Man', 'Deep / Cinematic'] },
   { id: 'en-Mary_woman_bgm', name: 'en-Mary_woman_bgm (English - Female / BGM Included)', gender: 'Female', description: 'VibeVoice English female narrator with embedded background music atmospheric score', tags: ['VibeVoice', 'English', 'Woman', 'BGM Included'] },
   { id: 'en-Maya_woman', name: 'en-Maya_woman (English - Female / Woman)', gender: 'Female', description: 'VibeVoice English warm, natural female narrator ideal for audiobooks and character dialogue', tags: ['VibeVoice', 'English', 'Woman', 'Warm Storyteller'] },
@@ -94,8 +171,8 @@ export const AUDIO_TAGS = [
 // Initialize GoogleGenAI client
 function getAIClient() {
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error('GEMINI_API_KEY is not configured in the environment.');
+  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
+    throw new Error('GEMINI_API_KEY is not configured in .env. To synthesize speech without cloud limits, use local VibeVoice 1.5B or 7B.');
   }
   return new GoogleGenAI({
     apiKey,
@@ -107,6 +184,20 @@ function getAIClient() {
   });
 }
 
+// Endpoint: Fetch local VibeVoice Neural Engine status
+app.get('/api/vibevoice/status', async (_req, res) => {
+  const health = await checkVibeVoiceHealth();
+  if (health.ok) {
+    return res.json({ connected: true, ...health.data });
+  }
+  return res.json({
+    connected: false,
+    serverUrl: VIBEVOICE_SERVER_URL,
+    pythonPath: VIBEVOICE_PYTHON,
+    message: 'Local VibeVoice neural server is offline or warming up.',
+  });
+});
+
 // Endpoint: Fetch available voices and presets
 app.get('/api/tts/voices', (_req, res) => {
   res.json({
@@ -114,8 +205,8 @@ app.get('/api/tts/voices', (_req, res) => {
     vibevoiceProfiles: VIBEVOICE_PROFILES,
     tags: AUDIO_TAGS,
     models: [
-      { id: 'vibevoice-7b', name: 'VibeVoice 7B (Flagship Deep Cinematic & Multi-Role)', badge: 'VibeVoice 7B', default: true },
-      { id: 'vibevoice-1.5b', name: 'VibeVoice 1.5B (Fast Conversational & Multi-Speaker)', badge: 'VibeVoice 1.5B', default: false },
+      { id: 'vibevoice-1.5b', name: 'VibeVoice 1.5B (Fast Conversational & Multi-Speaker)', badge: 'VibeVoice 1.5B', default: true },
+      { id: 'vibevoice-7b', name: 'VibeVoice 7B (Flagship Deep Cinematic & Multi-Role)', badge: 'VibeVoice 7B', default: false },
       { id: 'gemini-3.8-flash-lite-tts', name: 'Gemini 3.1 Flash Lite TTS (Fast & Standard)', badge: 'Lite 3.1', default: false },
       { id: 'gemini-3.8-flash-tts', name: 'Gemini 3.1 Flash TTS (Expressive & Voice Design)', badge: 'Expressive 3.1', default: false },
       { id: 'local-web-voice', name: 'Local Web Voice Engine (Unlimited & Offline)', badge: 'Local Synth', default: false },
@@ -130,12 +221,70 @@ app.post('/api/tts/generate', async (req, res) => {
       chunkId,
       text,
       voice = 'en-Alice_woman',
-      model = 'vibevoice-7b',
+      model = 'vibevoice-1.5b',
       stylePrompt = '',
     } = req.body;
 
     if (!text || typeof text !== 'string' || text.trim().length === 0) {
       return res.status(400).json({ error: 'Text is required for TTS generation.' });
+    }
+
+    // Direct routing to Local VibeVoice Neural Server for 1.5B and 7B models
+    if (model.startsWith('vibevoice')) {
+      const serverReady = await ensureVibeVoiceServer();
+      if (!serverReady) {
+        throw new Error(
+          `VibeVoice local server is offline or could not be reached at ${VIBEVOICE_SERVER_URL}. Please verify Python environment: ${VIBEVOICE_PYTHON}`
+        );
+      }
+
+      console.log(`🎙️ Routing chunk [${chunkId || 'chunk'}] to Local VibeVoice (${model} / ${voice})...`);
+      const vResp = await fetch(`${VIBEVOICE_SERVER_URL}/api/tts/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chunkId,
+          text,
+          voice,
+          model,
+          stylePrompt,
+          customSampleBase64: req.body.customSampleBase64 || null,
+        }),
+      });
+
+      if (!vResp.ok) {
+        const errJson = await vResp.json().catch(() => ({}));
+        throw new Error(errJson.detail || `VibeVoice inference failed (Status ${vResp.status})`);
+      }
+
+      const vData: any = await vResp.json();
+      let pcmBase64 = vData.rawPcmBase64;
+      if (!pcmBase64 && vData.audioBase64) {
+        const cleanWav = vData.audioBase64.replace(/^data:audio\/[a-z0-9_-]+;base64,/i, '').trim();
+        const wavBuf = Buffer.from(cleanWav, 'base64');
+        let offset = 44;
+        const dataIdx = wavBuf.indexOf('data');
+        if (dataIdx !== -1 && dataIdx + 8 <= wavBuf.length) {
+          offset = dataIdx + 8;
+        }
+        if (wavBuf.length > offset) {
+          pcmBase64 = wavBuf.subarray(offset).toString('base64');
+        }
+      }
+
+      return res.json({
+        chunkId,
+        audioBase64: vData.audioBase64,
+        audioUrl: vData.audioUrl || `data:audio/wav;base64,${vData.audioBase64}`,
+        rawPcmBase64: pcmBase64 || null,
+        sampleRate: vData.sampleRate || 24000,
+        duration: vData.duration,
+        voice: vData.voice || voice,
+        model: vData.model || model,
+        text,
+        generationTime: vData.generationTime,
+        engine: 'VibeVoice Local GPU',
+      });
     }
 
     const ai = getAIClient();
@@ -157,6 +306,10 @@ app.post('/api/tts/generate', async (req, res) => {
       'en-Carter_man': {
         geminiVoice: 'Puck',
         styleHint: 'Carter profile: dynamic, confident English male voice.',
+      },
+      'en-Derek': {
+        geminiVoice: 'Puck',
+        styleHint: 'Derek profile: lively, fun, energetic English male narrator with dynamic delivery.',
       },
       'en-Frank_man': {
         geminiVoice: 'Charon',
@@ -622,7 +775,19 @@ app.post('/api/tts/merge', (req, res) => {
 
     pcmChunks.forEach((chunkBase64, index) => {
       if (chunkBase64 && typeof chunkBase64 === 'string') {
-        const buf = Buffer.from(chunkBase64, 'base64');
+        const cleanBase64 = chunkBase64.replace(/^data:audio\/[a-z0-9_-]+;base64,/i, '').trim();
+        let buf = Buffer.from(cleanBase64, 'base64');
+        
+        // If this chunk has a RIFF WAV header, strip it so only raw PCM samples are concatenated
+        if (buf.length >= 44 && buf.toString('ascii', 0, 4) === 'RIFF') {
+          let pcmOffset = 44;
+          const dataIdx = buf.indexOf('data');
+          if (dataIdx !== -1 && dataIdx + 8 <= buf.length) {
+            pcmOffset = dataIdx + 8;
+          }
+          buf = buf.subarray(pcmOffset);
+        }
+
         buffers.push(buf);
         // Add silence gap between chunks (not after the last one)
         if (index < pcmChunks.length - 1 && gapBytesCount > 0) {
@@ -655,6 +820,195 @@ app.post('/api/tts/merge', (req, res) => {
   }
 });
 
+// --- Download Ticket Store for reliable RFC 6266 HTTP downloads ---
+interface DownloadTicketEntry {
+  buffer: Buffer;
+  filename: string;
+  mimeType: string;
+  createdAt: number;
+}
+
+const downloadTicketStore = new Map<string, DownloadTicketEntry>();
+
+// Housekeeping: purge items older than 20 minutes every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [ticket, entry] of downloadTicketStore.entries()) {
+    if (now - entry.createdAt > 20 * 60 * 1000) {
+      downloadTicketStore.delete(ticket);
+    }
+  }
+}, 5 * 60 * 1000);
+
+// Endpoint: Register in-memory base64 audio/zip and receive direct HTTP GET download URL
+app.post('/api/tts/prepare-download', (req, res) => {
+  try {
+    const { fileBase64, filename = 'chunk_001.wav', mimeType = 'audio/wav' } = req.body;
+    if (!fileBase64 || typeof fileBase64 !== 'string') {
+      return res.status(400).json({ error: 'fileBase64 data is required.' });
+    }
+
+    const cleanBase64 = fileBase64.replace(/^data:[a-zA-Z0-9_\-\/]+;base64,/i, '').trim();
+    const buffer = Buffer.from(cleanBase64, 'base64');
+
+    let cleanFilename = path.basename(filename.trim()).replace(/[^a-zA-Z0-9_.-]/g, '_');
+    if (!cleanFilename || cleanFilename === '.wav') {
+      cleanFilename = mimeType.includes('zip') ? 'audiocraft_studio_stems_all_chunks.zip' : 'chunk_001.wav';
+    }
+
+    const ticket = Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
+    downloadTicketStore.set(ticket, {
+      buffer,
+      filename: cleanFilename,
+      mimeType: mimeType || (cleanFilename.endsWith('.zip') ? 'application/zip' : 'audio/wav'),
+      createdAt: Date.now(),
+    });
+
+    // Directly save to user's Windows Downloads directory and project exports folder
+    let savedToDownloads = false;
+    let savedPath = '';
+    try {
+      const userDownloads = path.join(process.env.USERPROFILE || 'C:\\Users\\rayud', 'Downloads');
+      if (fs.existsSync(userDownloads)) {
+        savedPath = path.join(userDownloads, cleanFilename);
+        fs.writeFileSync(savedPath, buffer);
+        savedToDownloads = true;
+      }
+      const exportsDir = path.join(__dirname, 'exports');
+      if (!fs.existsSync(exportsDir)) {
+        fs.mkdirSync(exportsDir, { recursive: true });
+      }
+      fs.writeFileSync(path.join(exportsDir, cleanFilename), buffer);
+      console.log(`💾 Saved ${cleanFilename} directly to Downloads: ${savedPath}`);
+    } catch (saveErr) {
+      console.warn('Direct file save warning:', saveErr);
+    }
+
+    const downloadUrl = `/api/tts/download/${ticket}/${encodeURIComponent(cleanFilename)}`;
+    return res.json({
+      success: true,
+      ticket,
+      filename: cleanFilename,
+      downloadUrl,
+      sizeBytes: buffer.length,
+      savedToDownloads,
+      savedPath,
+    });
+  } catch (error: any) {
+    console.error('Error in /api/tts/prepare-download:', error);
+    return res.status(500).json({ error: error?.message || 'Failed to prepare download.' });
+  }
+});
+
+// Endpoint: Server-side ZIP archive compiler and direct HTTP GET ticket dispenser
+app.post('/api/tts/build-zip', async (req, res) => {
+  try {
+    const { chunks, projectName = 'audiocraft_studio_stems' } = req.body;
+    if (!Array.isArray(chunks) || chunks.length === 0) {
+      return res.status(400).json({ error: 'No audio chunks provided for ZIP compilation.' });
+    }
+
+    const zip = new JSZip();
+    chunks.forEach((chunk: any) => {
+      if (chunk.audioBase64) {
+        const clean = chunk.audioBase64.replace(/^data:audio\/[a-z0-9_-]+;base64,/i, '').trim();
+        const chunkBuf = Buffer.from(clean, 'base64');
+        const chunkIndex = typeof chunk.index === 'number' ? chunk.index : 1;
+        const chunkName = `chunk_${String(chunkIndex).padStart(3, '0')}.wav`;
+        zip.file(chunkName, chunkBuf);
+      }
+    });
+
+    let formattedProject = (projectName || 'audiocraft_studio_stems')
+      .replace(/\.zip$/i, '')
+      .trim()
+      .replace(/\s+/g, '_')
+      .replace(/[^a-zA-Z0-9_-]/g, '_')
+      .replace(/_+/g, '_');
+
+    if (!formattedProject || formattedProject === '_') {
+      formattedProject = 'audiocraft_studio_stems';
+    }
+
+    const zipFilename = formattedProject.endsWith('_all_chunks')
+      ? `${formattedProject}.zip`
+      : `${formattedProject}_all_chunks.zip`;
+
+    const zipBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+
+    const ticket = Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
+    downloadTicketStore.set(ticket, {
+      buffer: zipBuffer,
+      filename: zipFilename,
+      mimeType: 'application/zip',
+      createdAt: Date.now(),
+    });
+
+    // Directly save ZIP to user's Windows Downloads directory and project exports folder
+    let savedToDownloads = false;
+    let savedPath = '';
+    try {
+      const userDownloads = path.join(process.env.USERPROFILE || 'C:\\Users\\rayud', 'Downloads');
+      if (fs.existsSync(userDownloads)) {
+        savedPath = path.join(userDownloads, zipFilename);
+        fs.writeFileSync(savedPath, zipBuffer);
+        savedToDownloads = true;
+      }
+      const exportsDir = path.join(__dirname, 'exports');
+      if (!fs.existsSync(exportsDir)) {
+        fs.mkdirSync(exportsDir, { recursive: true });
+      }
+      fs.writeFileSync(path.join(exportsDir, zipFilename), zipBuffer);
+      console.log(`💾 Saved ZIP ${zipFilename} directly to Downloads: ${savedPath}`);
+    } catch (saveErr) {
+      console.warn('Direct ZIP save warning:', saveErr);
+    }
+
+    const downloadUrl = `/api/tts/download/${ticket}/${encodeURIComponent(zipFilename)}`;
+    return res.json({
+      success: true,
+      ticket,
+      filename: zipFilename,
+      downloadUrl,
+      sizeBytes: zipBuffer.length,
+      chunksCount: chunks.length,
+      savedToDownloads,
+      savedPath,
+    });
+  } catch (error: any) {
+    console.error('Error in /api/tts/build-zip:', error);
+    return res.status(500).json({ error: error?.message || 'Failed to generate ZIP archive.' });
+  }
+});
+
+// Endpoint: RFC 6266 Attachment file dispenser with strict HTTP Content-Disposition
+app.get('/api/tts/download/:ticket/:filename', (req, res) => {
+  try {
+    const { ticket, filename } = req.params;
+    const entry = downloadTicketStore.get(ticket);
+    if (!entry) {
+      return res.status(404).send('Download link expired or not found. Please click download again in AudioCraft Studio.');
+    }
+
+    const cleanFilename = entry.filename || filename || 'chunk_001.wav';
+
+    res.setHeader('Content-Type', entry.mimeType || 'application/octet-stream');
+    res.setHeader('Content-Length', entry.buffer.length);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${cleanFilename}"; filename*=UTF-8''${encodeURIComponent(cleanFilename)}`
+    );
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+
+    return res.end(entry.buffer);
+  } catch (error: any) {
+    console.error('Error serving download:', error);
+    return res.status(500).send('Error streaming download file.');
+  }
+});
+
 // Mount Vite or static serving
 async function setupServer() {
   if (process.env.NODE_ENV !== 'production') {
@@ -673,7 +1027,27 @@ async function setupServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`AudioCraft Studio server running on http://0.0.0.0:${PORT}`);
+    // Auto-detect or warm up local VibeVoice server in background
+    ensureVibeVoiceServer().catch((err) => {
+      console.warn('[VibeVoice] Background warmup note:', err?.message || err);
+    });
   });
 }
 
+// Clean termination of child processes
+process.on('SIGINT', () => {
+  if (vibeVoiceProcess) {
+    try { vibeVoiceProcess.kill(); } catch {}
+  }
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  if (vibeVoiceProcess) {
+    try { vibeVoiceProcess.kill(); } catch {}
+  }
+  process.exit(0);
+});
+
 setupServer();
+

@@ -54,7 +54,7 @@ export default function App() {
   // Master Script & Settings
   const [script, setScript] = useState<string>(DEFAULT_MANHWA_SCRIPT);
   const [customVoices, setCustomVoices] = useState<VoiceOption[]>([]);
-  const [selectedModel, setSelectedModel] = useState<string>('vibevoice-7b');
+  const [selectedModel, setSelectedModel] = useState<string>('vibevoice-1.5b');
   const [currentVoice, setCurrentVoice] = useState<string>('en-Alice_woman');
   const [language, setLanguage] = useState<string>('English');
   const [style, setStyle] = useState<string>('Narrative');
@@ -468,7 +468,7 @@ export default function App() {
 
   // Merge Audio into continuous master track
   const handleMergeAudio = async () => {
-    const readyChunks = chunks.filter((c) => c.status === 'generated' && c.rawPcmBase64);
+    const readyChunks = chunks.filter((c) => c.status === 'generated' && (c.rawPcmBase64 || c.audioBase64));
 
     if (readyChunks.length === 0) {
       showToast('Generate audio chunks first before merging.', 'error');
@@ -481,7 +481,7 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          pcmChunks: readyChunks.map((c) => c.rawPcmBase64),
+          pcmChunks: readyChunks.map((c) => c.rawPcmBase64 || c.audioBase64),
           gapDurationMs: 300,
           sampleRate: 24000,
         }),
@@ -513,8 +513,11 @@ export default function App() {
 
   const handleDownloadAllZip = async () => {
     try {
-      await downloadAllChunksZip(chunks, 'audiocraft_studio_stems');
-      showToast('Stems ZIP downloaded successfully!', 'success');
+      const activeProjectName = projectName && projectName.trim() && projectName !== 'Untitled Voice Project'
+        ? projectName.trim()
+        : 'audiocraft_studio_stems';
+      await downloadAllChunksZip(chunks, activeProjectName);
+      showToast('All Chunks ZIP downloaded successfully!', 'success');
     } catch (err: any) {
       showToast(err?.message || 'Failed to download ZIP.', 'error');
     }
@@ -866,6 +869,7 @@ export default function App() {
           {/* 5. Merge & Download + 6. Final Audio */}
           <MergeAndFinalAudioPanel
             masterTrack={masterTrack}
+            projectName={projectName}
             onMergeAudio={handleMergeAudio}
             onDownloadAllZip={handleDownloadAllZip}
             isMerging={isMerging}

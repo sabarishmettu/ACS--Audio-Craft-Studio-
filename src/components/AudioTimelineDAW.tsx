@@ -330,28 +330,46 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
     if (resetTime) {
       setCurrentTime(0);
       currentTimeRef.current = 0;
+    } else {
+      setCurrentTime(currentTimeRef.current);
     }
   }, []);
 
-  // Continuous animation loop ensuring playhead moves with zero lag
+  // Continuous animation loop ensuring playhead moves smoothly without starving audio thread
   const startProgressTracking = useCallback(
     (getLiveTime: () => number) => {
       if (animFrameRef.current) {
         cancelAnimationFrame(animFrameRef.current);
       }
 
+      let lastStateUpdate = performance.now();
+
       const loop = () => {
         if (!isPlayingRef.current) return;
 
         if (!isDraggingPlayheadRef.current) {
           const live = getLiveTime();
-          setCurrentTime(live);
           currentTimeRef.current = live;
+
+          const now = performance.now();
+          // Update React state at ~15fps during playback to avoid main-thread blocking audio buffer underruns
+          if (now - lastStateUpdate > 66) {
+            lastStateUpdate = now;
+            setCurrentTime(live);
+          }
 
           // Auto-scroll timeline container to keep playhead in view
           if (timelineScrollRef.current && timelineView === 'chunks') {
             const container = timelineScrollRef.current;
-            const playheadPx = playheadPixelOffset;
+            const active = chunkLayoutMap.find(
+              (c) => live >= c.startTime && live <= c.endTime
+            );
+            let playheadPx = 8;
+            if (active) {
+              const span = Math.max(0.01, active.endTime - active.startTime);
+              const prog = Math.max(0, Math.min(1, (live - active.startTime) / span));
+              playheadPx = active.left + prog * active.width;
+            }
             if (playheadPx > container.scrollLeft + container.clientWidth - 120) {
               container.scrollLeft = playheadPx - 120;
             } else if (playheadPx < container.scrollLeft + 60 && container.scrollLeft > 0) {
@@ -365,7 +383,7 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
 
       animFrameRef.current = requestAnimationFrame(loop);
     },
-    [timelineView, playheadPixelOffset]
+    [timelineView, chunkLayoutMap]
   );
 
   // Play audio sequentially starting at chunk index with exact millisecond offset
@@ -382,113 +400,46 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
       const targetChunk = chunkTimelineData[idx];
       setSelectedBlockId(targetChunk.id);
 
-      // Check if this chunk is Local Speech Synthesis
-      const isLocal =
-        targetChunk.selectedVoice?.includes('Local') ||
-        targetChunk.selectedVoice?.includes('Web Synth') ||
-        targetChunk.selectedVoice?.includes('Offline');
-
-      if (isLocal) {
-        // Stop any prior speech and pause HTML5 audio
+      // 1. If audioBase64 exists, ALWAYS play synthesized WAV via dedicated HTML5 Audio element!
+      if (targetChunk.audioBase64) {
         stopAllSpeech();
-        if (audioPlayerRef.current) {
-          try {
-            audioPlayerRef.current.pause();
-          } catch (e) {}
-        }
 
-        let spokenText = targetChunk.text;
-        const chunkDur = targetChunk.duration || 5;
-        if (offsetSecs > 0) {
-          const words = targetChunk.text.split(/\s+/).filter(Boolean);
-          const progress = Math.min(0.95, Math.max(0, offsetSecs / chunkDur));
-          const startWordIdx = Math.floor(words.length * progress);
-          spokenText = words.slice(startWordIdx).join(' ');
-        }
-
-        const startLocalTimestamp = performance.now() - offsetSecs * 1000;
-        const speed = targetChunk.speed || 1.0;
-        const pitch = 1.0 + (targetChunk.pitch || 0) / 10;
-        const gender = detectVoiceGender(targetChunk.selectedVoice);
-
-        playSpeechUtterance(
-          spokenText,
-          gender,
-          speed,
-          pitch,
-          () => {
-            // ONLY advance if still playing!
-            if (!isPlayingRef.current) return;
-            if (currentChunkIndexRef.current === idx) {
-              if (idx + 1 < chunkTimelineData.length) {
-                const nextChunk = chunkTimelineData[idx + 1];
-                setCurrentTime(nextChunk.startTime);
-                currentTimeRef.current = nextChunk.startTime;
-                playChunkAtIndex(idx + 1, 0);
-              } else {
-                stopTimelinePlayback(false);
-              }
+        // Pause any other playing audio on the page to prevent acoustic comb filtering / dish sound
+        if (typeof document !== 'undefined') {
+          document.querySelectorAll('audio').forEach((el) => {
+            if (el !== audioPlayerRef.current) {
+              try {
+                el.pause();
+              } catch (e) {}
             }
-          },
-          targetChunk.selectedVoice
-        );
-
-        const getLiveLocalTime = () => {
-          const elapsed = (performance.now() - startLocalTimestamp) / 1000;
-          return targetChunk.startTime + Math.min(chunkDur, Math.max(0, elapsed));
-        };
-
-        startProgressTracking(getLiveLocalTime);
-        return;
-      }
-
-      // Cloud / Gemini TTS Audio via HTML5 Audio element
-      stopAllSpeech();
-
-      // Preload next chunk audio buffer in the background for gapless handoff
-      if (idx + 1 < chunkTimelineData.length) {
-        const nextChunk = chunkTimelineData[idx + 1];
-        if (nextChunk.audioBase64) {
-          const preloadSrc =
-            nextChunk.audioUrl ||
-            (nextChunk.audioBase64.startsWith('data:')
-              ? nextChunk.audioBase64
-              : `data:audio/wav;base64,${nextChunk.audioBase64}`);
-          const preload = new Audio(preloadSrc);
-          preload.preload = 'auto';
-          preloadedAudioRef.current = preload;
+          });
         }
-      }
 
-      const audioSrc =
-        targetChunk.audioUrl ||
-        (targetChunk.audioBase64?.startsWith('data:')
-          ? targetChunk.audioBase64
-          : `data:audio/wav;base64,${targetChunk.audioBase64}`);
-
-      let audio: HTMLAudioElement;
-      if (
-        audioPlayerRef.current &&
-        loadedChunkIdRef.current === targetChunk.id &&
-        targetChunk.audioBase64
-      ) {
-        audio = audioPlayerRef.current;
-        if (offsetSecs >= 0 && Math.abs((audio.currentTime || 0) - offsetSecs) > 0.05) {
-          try {
-            audio.currentTime = offsetSecs;
-          } catch (e) {}
+        if (!audioPlayerRef.current) {
+          audioPlayerRef.current = new Audio();
         }
-      } else {
-        if (audioPlayerRef.current) {
-          try {
-            audioPlayerRef.current.pause();
-          } catch (e) {}
-        }
-        audio = new Audio(audioSrc);
-        audioPlayerRef.current = audio;
-        loadedChunkIdRef.current = targetChunk.id;
+        const audio = audioPlayerRef.current;
 
-        const applyOffset = () => {
+        // Clear prior listeners to prevent leak/duplicate calls
+        audio.onended = null;
+        audio.ontimeupdate = null;
+        audio.onloadedmetadata = null;
+        audio.onerror = null;
+
+        const cleanBase64 = targetChunk.audioBase64.replace(/^data:audio\/[a-z0-9_-]+;base64,/i, '').trim();
+        const targetSrc = `data:audio/wav;base64,${cleanBase64}`;
+
+        if (loadedChunkIdRef.current !== targetChunk.id || audio.src !== targetSrc) {
+          audio.src = targetSrc;
+          loadedChunkIdRef.current = targetChunk.id;
+          audio.load();
+        }
+
+        audio.muted = isMuted;
+        audio.volume = trackVolume;
+
+        // Apply seek offset cleanly ONLY ONCE when metadata is ready
+        const applySeek = () => {
           if (offsetSecs > 0) {
             try {
               audio.currentTime = offsetSecs;
@@ -496,20 +447,17 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
           }
         };
 
-        applyOffset();
-        audio.addEventListener('loadedmetadata', applyOffset);
-        audio.addEventListener('canplay', applyOffset);
+        if (audio.readyState >= 1) {
+          applySeek();
+        } else {
+          audio.onloadedmetadata = () => {
+            applySeek();
+            audio.onloadedmetadata = null;
+          };
+        }
 
-        audio.addEventListener('timeupdate', () => {
-          if (audioPlayerRef.current && !isDraggingPlayheadRef.current && isPlayingRef.current) {
-            const chunkOffset = audioPlayerRef.current.currentTime || 0;
-            const live = targetChunk.startTime + chunkOffset;
-            setCurrentTime(live);
-            currentTimeRef.current = live;
-          }
-        });
-
-        audio.addEventListener('ended', () => {
+        // Sequential advancement when chunk audio ends
+        audio.onended = () => {
           if (!isPlayingRef.current) return;
           if (currentChunkIndexRef.current === idx) {
             if (idx + 1 < chunkTimelineData.length) {
@@ -521,46 +469,91 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
               stopTimelinePlayback(false);
             }
           }
-        });
+        };
+
+        audio.ontimeupdate = () => {
+          if (audioPlayerRef.current && !isDraggingPlayheadRef.current && isPlayingRef.current) {
+            const chunkOffset = audioPlayerRef.current.currentTime || 0;
+            currentTimeRef.current = targetChunk.startTime + chunkOffset;
+          }
+        };
+
+        const getLiveCurrentTime = () => {
+          if (!audioPlayerRef.current) return targetChunk.startTime;
+          const chunkOffset = audioPlayerRef.current.currentTime || 0;
+          return targetChunk.startTime + chunkOffset;
+        };
+
+        const playPromise = audio.play();
+        if (playPromise !== undefined) {
+          playPromise
+            .then(() => {
+              if (!isPlayingRef.current) {
+                try {
+                  audio.pause();
+                } catch (e) {}
+                return;
+              }
+              startProgressTracking(getLiveCurrentTime);
+            })
+            .catch((err) => {
+              if (!isPlayingRef.current) return;
+              console.warn('Playback play() warning:', err);
+              startProgressTracking(getLiveCurrentTime);
+            });
+        }
+        return;
       }
 
-      audio.muted = isMuted;
-      audio.volume = trackVolume;
-
-      if (offsetSecs > 0) {
+      // 2. Only fallback to Web Speech Utterance if audioBase64 does NOT exist
+      stopAllSpeech();
+      if (audioPlayerRef.current) {
         try {
-          audio.currentTime = offsetSecs;
+          audioPlayerRef.current.pause();
         } catch (e) {}
       }
 
-      const getLiveCurrentTime = () => {
-        if (!audioPlayerRef.current) return targetChunk.startTime;
-        const chunkOffset = audioPlayerRef.current.currentTime || 0;
-        return targetChunk.startTime + chunkOffset;
-      };
-
-      const handleStart = () => {
-        if (!isPlayingRef.current) {
-          try {
-            audio.pause();
-          } catch (e) {}
-          return;
-        }
-        startProgressTracking(getLiveCurrentTime);
-      };
-
-      const playPromise = audio.play();
-      if (playPromise !== undefined) {
-        playPromise
-          .then(() => {
-            handleStart();
-          })
-          .catch((err) => {
-            if (!isPlayingRef.current) return;
-            console.warn('Playback started with fallback:', err);
-            handleStart();
-          });
+      let spokenText = targetChunk.text;
+      const chunkDur = targetChunk.duration || 5;
+      if (offsetSecs > 0) {
+        const words = targetChunk.text.split(/\s+/).filter(Boolean);
+        const progress = Math.min(0.95, Math.max(0, offsetSecs / chunkDur));
+        const startWordIdx = Math.floor(words.length * progress);
+        spokenText = words.slice(startWordIdx).join(' ');
       }
+
+      const startLocalTimestamp = performance.now() - offsetSecs * 1000;
+      const speed = targetChunk.speed || 1.0;
+      const pitch = 1.0 + (targetChunk.pitch || 0) / 10;
+      const gender = detectVoiceGender(targetChunk.selectedVoice);
+
+      playSpeechUtterance(
+        spokenText,
+        gender,
+        speed,
+        pitch,
+        () => {
+          if (!isPlayingRef.current) return;
+          if (currentChunkIndexRef.current === idx) {
+            if (idx + 1 < chunkTimelineData.length) {
+              const nextChunk = chunkTimelineData[idx + 1];
+              setCurrentTime(nextChunk.startTime);
+              currentTimeRef.current = nextChunk.startTime;
+              playChunkAtIndex(idx + 1, 0);
+            } else {
+              stopTimelinePlayback(false);
+            }
+          }
+        },
+        targetChunk.selectedVoice
+      );
+
+      const getLiveLocalTime = () => {
+        const elapsed = (performance.now() - startLocalTimestamp) / 1000;
+        return targetChunk.startTime + Math.min(chunkDur, Math.max(0, elapsed));
+      };
+
+      startProgressTracking(getLiveLocalTime);
     },
     [chunkTimelineData, stopTimelinePlayback, startProgressTracking, isMuted, trackVolume]
   );
@@ -571,86 +564,87 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
       if (!isPlayingRef.current) return;
       if (!masterAudioBase64) return;
 
-      const audioSrc = masterAudioBase64.startsWith('data:')
-        ? masterAudioBase64
-        : `data:audio/wav;base64,${masterAudioBase64}`;
+      stopAllSpeech();
 
-      let audio: HTMLAudioElement;
-      if (audioPlayerRef.current && loadedChunkIdRef.current === 'master') {
-        audio = audioPlayerRef.current;
-        if (startTimeSecs >= 0 && Math.abs((audio.currentTime || 0) - startTimeSecs) > 0.05) {
-          try {
-            audio.currentTime = startTimeSecs;
-          } catch (e) {}
-        }
-      } else {
-        if (audioPlayerRef.current) {
-          try {
-            audioPlayerRef.current.pause();
-          } catch (e) {}
-        }
-        audio = new Audio(audioSrc);
-        audioPlayerRef.current = audio;
-        loadedChunkIdRef.current = 'master';
-
-        const applyMasterOffset = () => {
-          if (startTimeSecs > 0) {
+      if (typeof document !== 'undefined') {
+        document.querySelectorAll('audio').forEach((el) => {
+          if (el !== audioPlayerRef.current) {
             try {
-              audio.currentTime = startTimeSecs;
+              el.pause();
             } catch (e) {}
           }
-        };
-
-        applyMasterOffset();
-        audio.addEventListener('loadedmetadata', applyMasterOffset);
-        audio.addEventListener('canplay', applyMasterOffset);
-
-        audio.addEventListener('timeupdate', () => {
-          if (audioPlayerRef.current && !isDraggingPlayheadRef.current && isPlayingRef.current) {
-            const live = audioPlayerRef.current.currentTime;
-            setCurrentTime(live);
-            currentTimeRef.current = live;
-          }
         });
+      }
 
-        audio.addEventListener('ended', () => {
-          stopTimelinePlayback(false);
-        });
+      if (!audioPlayerRef.current) {
+        audioPlayerRef.current = new Audio();
+      }
+      const audio = audioPlayerRef.current;
+
+      audio.onended = null;
+      audio.ontimeupdate = null;
+      audio.onloadedmetadata = null;
+      audio.onerror = null;
+
+      const cleanBase64 = masterAudioBase64.replace(/^data:audio\/[a-z0-9_-]+;base64,/i, '').trim();
+      const targetSrc = `data:audio/wav;base64,${cleanBase64}`;
+
+      if (loadedChunkIdRef.current !== 'master' || audio.src !== targetSrc) {
+        audio.src = targetSrc;
+        loadedChunkIdRef.current = 'master';
+        audio.load();
       }
 
       audio.muted = isMuted;
       audio.volume = trackVolume;
 
-      if (startTimeSecs > 0) {
-        try {
-          audio.currentTime = startTimeSecs;
-        } catch (e) {}
+      const applySeek = () => {
+        if (startTimeSecs > 0) {
+          try {
+            audio.currentTime = startTimeSecs;
+          } catch (e) {}
+        }
+      };
+
+      if (audio.readyState >= 1) {
+        applySeek();
+      } else {
+        audio.onloadedmetadata = () => {
+          applySeek();
+          audio.onloadedmetadata = null;
+        };
       }
+
+      audio.onended = () => {
+        stopTimelinePlayback(false);
+      };
+
+      audio.ontimeupdate = () => {
+        if (audioPlayerRef.current && !isDraggingPlayheadRef.current && isPlayingRef.current) {
+          currentTimeRef.current = audioPlayerRef.current.currentTime;
+        }
+      };
 
       const getLiveMasterTime = () => {
         return audioPlayerRef.current ? audioPlayerRef.current.currentTime : startTimeSecs;
-      };
-
-      const handleMasterStart = () => {
-        if (!isPlayingRef.current) {
-          try {
-            audio.pause();
-          } catch (e) {}
-          return;
-        }
-        startProgressTracking(getLiveMasterTime);
       };
 
       const playPromise = audio.play();
       if (playPromise !== undefined) {
         playPromise
           .then(() => {
-            handleMasterStart();
+            if (!isPlayingRef.current) {
+              try {
+                audio.pause();
+              } catch (e) {}
+              return;
+            }
+            startProgressTracking(getLiveMasterTime);
           })
           .catch((err) => {
             if (!isPlayingRef.current) return;
             console.warn('Master audio play warning:', err);
-            handleMasterStart();
+            startProgressTracking(getLiveMasterTime);
           });
       }
     },
@@ -773,13 +767,29 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
     ]
   );
 
-  // Global window listeners for playhead drag scrubbing
+  const getTimeFromPixelXRef = useRef(getTimeFromPixelX);
+  const handleLiveScrubRef = useRef(handleLiveScrub);
+  const seekToTimeRef = useRef(seekToTime);
+
+  useEffect(() => {
+    getTimeFromPixelXRef.current = getTimeFromPixelX;
+  }, [getTimeFromPixelX]);
+
+  useEffect(() => {
+    handleLiveScrubRef.current = handleLiveScrub;
+  }, [handleLiveScrub]);
+
+  useEffect(() => {
+    seekToTimeRef.current = seekToTime;
+  }, [seekToTime]);
+
+  // Global window listeners for playhead drag scrubbing (bound once with stable callback refs)
   useEffect(() => {
     const handleWindowMouseMove = (e: MouseEvent) => {
       if (!isDraggingPlayheadRef.current) return;
       e.preventDefault();
-      const newTime = getTimeFromPixelX(e.clientX);
-      handleLiveScrub(newTime);
+      const newTime = getTimeFromPixelXRef.current(e.clientX);
+      handleLiveScrubRef.current(newTime);
     };
 
     const handleWindowMouseUp = (e: MouseEvent) => {
@@ -787,15 +797,15 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
       isDraggingPlayheadRef.current = false;
       setIsDraggingPlayhead(false);
 
-      const finalTime = getTimeFromPixelX(e.clientX);
-      seekToTime(finalTime, isPlayingRef.current);
+      const finalTime = getTimeFromPixelXRef.current(e.clientX);
+      seekToTimeRef.current(finalTime, isPlayingRef.current);
     };
 
     const handleWindowTouchMove = (e: TouchEvent) => {
       if (!isDraggingPlayheadRef.current || e.touches.length === 0) return;
       const touchX = e.touches[0].clientX;
-      const newTime = getTimeFromPixelX(touchX);
-      handleLiveScrub(newTime);
+      const newTime = getTimeFromPixelXRef.current(touchX);
+      handleLiveScrubRef.current(newTime);
     };
 
     const handleWindowTouchEnd = (e: TouchEvent) => {
@@ -804,8 +814,8 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
       setIsDraggingPlayhead(false);
 
       const touchX = e.changedTouches[0]?.clientX || 0;
-      const finalTime = getTimeFromPixelX(touchX);
-      seekToTime(finalTime, isPlayingRef.current);
+      const finalTime = getTimeFromPixelXRef.current(touchX);
+      seekToTimeRef.current(finalTime, isPlayingRef.current);
     };
 
     window.addEventListener('mousemove', handleWindowMouseMove);
@@ -819,7 +829,7 @@ export const AudioTimelineDAW: React.FC<AudioTimelineDAWProps> = ({
       window.removeEventListener('touchmove', handleWindowTouchMove);
       window.removeEventListener('touchend', handleWindowTouchEnd);
     };
-  }, [getTimeFromPixelX, handleLiveScrub, seekToTime]);
+  }, []);
 
   // Start playhead dragging directly from the red handle
   const handlePlayheadMouseDown = (e: React.MouseEvent) => {

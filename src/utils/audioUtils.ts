@@ -27,6 +27,13 @@ export const VIBEVOICE_PROFILES: VoiceOption[] = [
     tags: ['VibeVoice', 'English', 'Man', 'Dynamic'],
   },
   {
+    id: 'en-Derek',
+    name: 'en-Derek (English - Male / Fun & Energetic)',
+    gender: 'Male' as const,
+    description: 'VibeVoice English lively, energetic male voice with dynamic inflection and natural conversational tone',
+    tags: ['VibeVoice', 'English', 'Man', 'Energetic'],
+  },
+  {
     id: 'en-Frank_man',
     name: 'en-Frank_man (English - Male / Man)',
     gender: 'Male' as const,
@@ -159,34 +166,144 @@ export function formatDurationHuman(seconds: number): string {
   return parts.join(' ');
 }
 
-export function downloadBase64Wav(base64Data: string, filename: string) {
-  const binaryString = atob(base64Data);
-  const len = binaryString.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
+export async function downloadBase64Wav(base64Data: string, filename: string): Promise<void> {
+  const cleanBase64 = base64Data.replace(/^data:audio\/[a-z0-9_-]+;base64,/i, '').trim();
+  const cleanFilename = filename.endsWith('.wav') ? filename : `${filename}.wav`;
+
+  // Method 1 (Primary & Guaranteed for Edge/Windows):
+  // Prepare a true RFC 6266 HTTP GET download via the server backend.
+  // The server responds with Content-Disposition: attachment; filename="chunk_001.wav"
+  // and Content-Type: audio/wav.
+  // Microsoft Edge and Chrome will NEVER rename it to a raw UUID!
+  try {
+    const res = await fetch('/api/tts/prepare-download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fileBase64: cleanBase64,
+        filename: cleanFilename,
+        mimeType: 'audio/wav',
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.downloadUrl) {
+        const link = document.createElement('a');
+        link.style.display = 'none';
+        link.href = data.downloadUrl;
+        link.download = cleanFilename;
+        link.setAttribute('download', cleanFilename);
+        document.body.appendChild(link);
+        link.click();
+        setTimeout(() => {
+          if (link.parentNode) link.parentNode.removeChild(link);
+        }, 5000);
+        return;
+      }
+    }
+  } catch (err) {
+    console.warn('Backend download endpoint unavailable, falling back to local File download:', err);
   }
-  const blob = new Blob([bytes], { type: 'audio/wav' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename.endsWith('.wav') ? filename : `${filename}.wav`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+
+  // Method 2 (Offline / Standalone Fallback):
+  // Use HTML5 File object with clean name metadata
+  try {
+    const binaryString = atob(cleanBase64);
+    const len = binaryString.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    const file = new File([bytes], cleanFilename, { type: 'audio/wav' });
+    const url = URL.createObjectURL(file);
+    const link = document.createElement('a');
+    link.style.display = 'none';
+    link.href = url;
+    link.download = cleanFilename;
+    link.setAttribute('download', cleanFilename);
+    document.body.appendChild(link);
+    link.click();
+
+    setTimeout(() => {
+      if (link.parentNode) link.parentNode.removeChild(link);
+      URL.revokeObjectURL(url);
+    }, 120000);
+  } catch (err) {
+    console.error('Local file download failed:', err);
+  }
 }
 
-export async function downloadAllChunksZip(chunks: ScriptChunk[], projectName = 'audiocraft-studio-export') {
-  const zip = new JSZip();
+export async function downloadAllChunksZip(
+  chunks: ScriptChunk[],
+  projectName = 'audiocraft_studio_stems'
+): Promise<void> {
+  // 1. Filter ONLY chunks that have finished generating audio
   const validChunks = chunks.filter((c) => c.status === 'generated' && c.audioBase64);
 
   if (validChunks.length === 0) {
     throw new Error('No generated audio chunks to download.');
   }
 
+  // 2. Clean and format the project name
+  let formattedProject = (projectName || 'audiocraft_studio_stems')
+    .replace(/\.zip$/i, '')
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .replace(/_+/g, '_');
+
+  if (!formattedProject || formattedProject === '_') {
+    formattedProject = 'audiocraft_studio_stems';
+  }
+
+  const downloadFilename = formattedProject.endsWith('_all_chunks')
+    ? `${formattedProject}.zip`
+    : `${formattedProject}_all_chunks.zip`;
+
+  // Method 1 (Primary & Guaranteed for Edge/Windows):
+  // Request server to compile the ZIP and dispense a direct HTTP GET download URL
+  try {
+    const payloadChunks = validChunks.map((chunk) => ({
+      index: chunk.index,
+      audioBase64: chunk.audioBase64,
+    }));
+
+    const res = await fetch('/api/tts/build-zip', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chunks: payloadChunks,
+        projectName: formattedProject,
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.downloadUrl) {
+        const link = document.createElement('a');
+        link.style.display = 'none';
+        link.href = data.downloadUrl;
+        link.download = downloadFilename;
+        link.setAttribute('download', downloadFilename);
+        document.body.appendChild(link);
+        link.click();
+        setTimeout(() => {
+          if (link.parentNode) link.parentNode.removeChild(link);
+        }, 5000);
+        return;
+      }
+    }
+  } catch (err) {
+    console.warn('Backend zip builder unavailable, compiling client-side:', err);
+  }
+
+  // Method 2 (Offline / Standalone Fallback):
+  // Client-side ZIP build with JSZip
+  const zip = new JSZip();
   validChunks.forEach((chunk) => {
-    const binary = atob(chunk.audioBase64!);
+    const cleanBase64 = chunk.audioBase64!.replace(/^data:audio\/[a-z0-9_-]+;base64,/i, '').trim();
+    const binary = atob(cleanBase64);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) {
       bytes[i] = binary.charCodeAt(i);
@@ -195,13 +312,56 @@ export async function downloadAllChunksZip(chunks: ScriptChunk[], projectName = 
     zip.file(filename, bytes);
   });
 
-  const content = await zip.generateAsync({ type: 'blob' });
-  const url = URL.createObjectURL(content);
+  const zipBase64 = await zip.generateAsync({ type: 'base64' });
+
+  try {
+    const res = await fetch('/api/tts/prepare-download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fileBase64: zipBase64,
+        filename: downloadFilename,
+        mimeType: 'application/zip',
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.downloadUrl) {
+        const link = document.createElement('a');
+        link.style.display = 'none';
+        link.href = data.downloadUrl;
+        link.download = downloadFilename;
+        link.setAttribute('download', downloadFilename);
+        document.body.appendChild(link);
+        link.click();
+        setTimeout(() => {
+          if (link.parentNode) link.parentNode.removeChild(link);
+        }, 5000);
+        return;
+      }
+    }
+  } catch {
+    // continue to local file
+  }
+
+  const binaryString = atob(zipBase64);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  const file = new File([bytes], downloadFilename, { type: 'application/zip' });
+  const url = URL.createObjectURL(file);
   const a = document.createElement('a');
+  a.style.display = 'none';
   a.href = url;
-  a.download = `${projectName}_all_chunks.zip`;
+  a.download = downloadFilename;
+  a.setAttribute('download', downloadFilename);
   document.body.appendChild(a);
   a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+
+  setTimeout(() => {
+    if (a.parentNode) a.parentNode.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 120000);
 }

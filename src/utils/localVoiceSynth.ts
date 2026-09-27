@@ -49,7 +49,7 @@ const FEMALE_NAMES = [
 const MALE_NAMES = [
   'david', 'mark', 'george', 'alex', 'guy', 'ryan', 'daniel', 'fred',
   'oliver', 'tom', 'aaron', 'arthur', 'gordon', 'james', 'richard', 'steffan', 'lee',
-  'carter', 'frank', 'samuel', 'puck', 'charon', 'fenrir', 'anchen', 'bowen',
+  'carter', 'frank', 'samuel', 'derek', 'puck', 'charon', 'fenrir', 'anchen', 'bowen',
   'en-us-neural2-d', 'en-us-neural2-j', 'en-us-standard-b', 'en-us-standard-d',
   'en-us-wavenet-b', 'en-us-wavenet-d', 'uk english male', 'us english male',
   'desktop male', 'natural male', 'google uk english male',
@@ -109,6 +109,7 @@ export function detectVoiceGender(
     lower.includes('carter') ||
     lower.includes('frank') ||
     lower.includes('samuel') ||
+    lower.includes('derek') ||
     lower.includes('anchen') ||
     lower.includes('bowen') ||
     lower.includes('david') ||

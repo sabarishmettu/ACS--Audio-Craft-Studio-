@@ -16,6 +16,7 @@ import { formatTime, formatDurationHuman, downloadBase64Wav } from '../utils/aud
 
 interface MergeAndFinalAudioPanelProps {
   masterTrack: MasterTrack | null;
+  projectName?: string;
   onMergeAudio: () => void;
   onDownloadAllZip: () => void;
   isMerging: boolean;
@@ -24,6 +25,7 @@ interface MergeAndFinalAudioPanelProps {
 
 export const MergeAndFinalAudioPanel: React.FC<MergeAndFinalAudioPanelProps> = ({
   masterTrack,
+  projectName,
   onMergeAudio,
   onDownloadAllZip,
   isMerging,
@@ -187,14 +189,15 @@ export const MergeAndFinalAudioPanel: React.FC<MergeAndFinalAudioPanelProps> = (
               <div className="flex items-center gap-1 shrink-0 pl-1 border-l border-slate-800">
                 <Volume2 className="h-3 w-3 text-slate-400" />
                 <select
-                  value={playbackRate}
+                  value={playbackRate === 1 ? '1' : playbackRate === 2 ? '2' : String(playbackRate)}
                   onChange={(e) => handleSpeedChange(parseFloat(e.target.value))}
                   className="bg-transparent text-[11px] font-mono text-slate-300 focus:outline-none cursor-pointer"
                 >
                   <option value="0.75" className="bg-slate-900">0.75x</option>
-                  <option value="1.0" className="bg-slate-900">1.0x</option>
+                  <option value="1" className="bg-slate-900">1.0x</option>
                   <option value="1.25" className="bg-slate-900">1.25x</option>
                   <option value="1.5" className="bg-slate-900">1.5x</option>
+                  <option value="2" className="bg-slate-900">2.0x</option>
                 </select>
               </div>
             </div>
@@ -202,12 +205,15 @@ export const MergeAndFinalAudioPanel: React.FC<MergeAndFinalAudioPanelProps> = (
             {/* Download Final Audio Green Button */}
             <div className="flex items-center gap-2 pt-1">
               <button
-                onClick={() =>
+                onClick={() => {
+                  const cleanMasterName = (projectName && projectName.trim() && projectName !== 'Untitled Voice Project')
+                    ? `${projectName.trim().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_-]/g, '_').replace(/_+/g, '_')}_final_master`
+                    : 'audiocraft_studio_final_master';
                   downloadBase64Wav(
                     masterTrack.audioBase64!,
-                    'audiocraft_studio_final_master.wav'
-                  )
-                }
+                    `${cleanMasterName}.wav`
+                  );
+                }}
                 className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white py-2 text-xs font-bold shadow-md shadow-emerald-950/40 transition-all"
               >
                 <Download className="h-3.5 w-3.5" />
