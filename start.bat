@@ -48,7 +48,7 @@ if %errorlevel% equ 0 (
 
 echo.
 echo [2/3] Launching Web Browser at http://localhost:3000/...
-start "" "http://localhost:3000/"
+start http://localhost:3000/
 
 echo.
 echo [3/3] Starting AudioCraft Studio Web Server (Port 3000)...

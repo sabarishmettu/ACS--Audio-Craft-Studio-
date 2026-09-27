@@ -1027,6 +1027,21 @@ async function setupServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`AudioCraft Studio server running on http://0.0.0.0:${PORT}`);
+
+    // Automatically open default web browser (Edge, Chrome, Brave) to studio
+    const appUrl = `http://localhost:${PORT}/`;
+    try {
+      if (process.platform === 'win32') {
+        spawn('cmd.exe', ['/c', 'start', appUrl], { detached: true, stdio: 'ignore' }).unref();
+      } else if (process.platform === 'darwin') {
+        spawn('open', [appUrl], { detached: true, stdio: 'ignore' }).unref();
+      } else {
+        spawn('xdg-open', [appUrl], { detached: true, stdio: 'ignore' }).unref();
+      }
+    } catch (e) {
+      console.warn('Could not auto-launch browser:', e);
+    }
+
     // Auto-detect or warm up local VibeVoice server in background
     ensureVibeVoiceServer().catch((err) => {
       console.warn('[VibeVoice] Background warmup note:', err?.message || err);
