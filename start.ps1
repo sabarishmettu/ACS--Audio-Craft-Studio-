@@ -35,10 +35,7 @@ if ($portActive) {
 
 Write-Host ""
 Write-Host "[2/3] Launching Web Browser at http://localhost:3000/..." -ForegroundColor Yellow
-Start-Job -ScriptBlock {
-    Start-Sleep -Seconds 2
-    Start-Process "http://localhost:3000/"
-} | Out-Null
+Start-Process "http://localhost:3000/"
 
 Write-Host ""
 Write-Host "[3/3] Starting AudioCraft Studio Web Server (Port 3000)..." -ForegroundColor Yellow

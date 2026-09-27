@@ -39,7 +39,7 @@ if %errorlevel% equ 0 (
         echo       🚀 Starting VibeVoice 1.5B on RTX GPU (port 8000)...
         start "VibeVoice 1.5B Neural Engine" /min "%PYTHON_EXE%" scripts\run_vibevoice_server.py --port 8000 --model vibevoice-1.5b --preload
         echo       ⏳ Waiting 3 seconds for neural weights warmup...
-        timeout /t 3 /nobreak >nul
+        ping 127.0.0.1 -n 4 >nul
     ) else (
         echo       ⚠️ Local Python environment not found at: %PYTHON_EXE%
         echo       Cloud TTS and Web Voice engines will remain fully available.
@@ -48,8 +48,7 @@ if %errorlevel% equ 0 (
 
 echo.
 echo [2/3] Launching Web Browser at http://localhost:3000/...
-:: Schedule browser to open after 2 seconds
-start "" cmd /c "timeout /t 2 /nobreak >nul && start http://localhost:3000/"
+start "" "http://localhost:3000/"
 
 echo.
 echo [3/3] Starting AudioCraft Studio Web Server (Port 3000)...
@@ -61,7 +60,7 @@ echo   💡 Press [Ctrl + C] in this window to stop the studio.
 echo ======================================================================
 echo.
 
-npm run dev
+call npm run dev
 
 echo.
 echo AudioCraft Studio server has stopped.
